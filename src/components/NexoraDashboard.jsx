@@ -15,6 +15,7 @@ import {
   X,
   History,
   ShieldCheck,
+  Cloud,
   AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -35,6 +36,11 @@ const NexoraDashboard = () => {
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
+  
+  // Cloud Sync States
+  const [sheetIdTeam, setSheetIdTeam] = useState(localStorage.getItem('nexora_sheet_team') || '');
+  const [sheetIdPayment, setSheetIdPayment] = useState(localStorage.getItem('nexora_sheet_payment') || '');
+  const [isSyncing, setIsSyncing] = useState(false);
 
   const handleFileUpload = (e, type) => {
     const file = e.target.files[0];
@@ -130,6 +136,94 @@ const NexoraDashboard = () => {
       alert("Error processing Excel data. Please check if the columns 'Team Name' exist in both files.");
       setIsProcessing(false);
     }
+  };
+
+  const fetchFromSheets = async () => {
+    if (!sheetIdTeam || !sheetIdPayment) {
+      alert("Please enter both Google Sheet IDs first!");
+      return;
+    }
+
+    setIsSyncing(true);
+    localStorage.setItem('nexora_sheet_team', sheetIdTeam);
+    localStorage.setItem('nexora_sheet_payment', sheetIdPayment);
+
+    try {
+      const fetchCSV = async (id) => {
+        const url = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("Could not fetch sheet. Ensure it is shared as 'Anyone with the link can view'.");
+        const text = await res.text();
+        const workbook = XLSX.read(text, { type: 'string' });
+        return XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+      };
+
+      const tData = await fetchCSV(sheetIdTeam);
+      const pData = await fetchCSV(sheetIdPayment);
+
+      setTeamData(tData);
+      setPaymentData(pData);
+      
+      // Auto-trigger merge after fetch
+      setTimeout(() => {
+         processAndMergeWithData(tData, pData);
+      }, 500);
+
+    } catch (error) {
+      console.error("Cloud Sync Error:", error);
+      alert(error.message);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const processAndMergeWithData = (tData, pData) => {
+    setIsProcessing(true);
+    const findVal = (obj, patterns) => {
+      const key = Object.keys(obj).find(k => {
+        const normalizedK = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+        return patterns.some(p => normalizedK.includes(p));
+      });
+      return key ? obj[key] : null;
+    };
+
+    const findAllVals = (obj, pattern) => {
+      return Object.keys(obj)
+        .filter(k => k.toLowerCase().replace(/[^a-z0-9]/g, '').includes(pattern))
+        .map(k => obj[k])
+        .filter(v => v && String(v).trim().toLowerCase() !== 'n/a');
+    };
+
+    const merged = tData.map(team => {
+      const teamIdKey = findVal(team, ['teamname', 'name', 'group', 'organization']) || team['Team Name'] || 'Unnamed Team';
+      const payment = pData.find(p => {
+        const pIdKey = findVal(p, ['teamname', 'name', 'group', 'team']) || p['Team Name'];
+        return String(pIdKey || '').toLowerCase().trim() === String(teamIdKey || '').toLowerCase().trim();
+      });
+
+      let membersList = findAllVals(team, 'participant');
+      if (membersList.length === 0) membersList = findAllVals(team, 'member');
+      if (membersList.length === 0) membersList = [findVal(team, ['members', 'names', 'allnames']) || 'Not specified'];
+      const memberString = Array.isArray(membersList) ? membersList.filter(m => m !== 'Not specified').join(', ') : String(membersList);
+
+      return {
+        ...team,
+        paymentStatus: payment ? (findVal(payment, ['status', 'paymentstatus', 'state']) || 'Paid') : 'Pending',
+        transactionId: payment ? (findVal(payment, ['transaction', 'txid', 'reference', 'utr']) || 'N/A') : 'N/A',
+        amount: payment ? (findVal(payment, ['amount', 'fees', 'paid']) || 0) : 0,
+        teamName: String(teamIdKey),
+        members: memberString || 'Not specified',
+        leader: String(findVal(team, ['leader', 'captain', 'poc', 'representative']) || membersList[0] || 'N/A'),
+        phone: String(findVal(team, ['phone', 'contact', 'mobile', 'whatsapp', 'number']) || 'N/A'),
+        email: String(findVal(team, ['email', 'mail']) || 'N/A').toLowerCase(),
+        project: findVal(team, ['project', 'title', 'idea', 'problem']) || 'N/A',
+        domain: findVal(team, ['domain', 'track', 'category', 'theme']) || 'N/A',
+        status: findVal(team, ['status', 'qualified', 'shortlist', 'result']) || 'Applied'
+      };
+    });
+
+    setMergedData(merged);
+    setIsProcessing(false);
   };
 
   const handleSearchChange = (val) => {
@@ -230,8 +324,41 @@ const NexoraDashboard = () => {
           <div className="upload-header">
             <Database className="icon" size={32} />
             <h2>Data Import Center</h2>
-            <p>Upload your team and payment Excel sheets to synchronize records.</p>
+            <p>Sync from Google Sheets or upload local Excel files.</p>
           </div>
+
+          <div className="cloud-sync-section">
+            <div className="sync-row">
+              <div className="input-group">
+                <label>Team Sheet ID</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. 1aBC...xyZ" 
+                  value={sheetIdTeam} 
+                  onChange={(e) => setSheetIdTeam(e.target.value)}
+                />
+              </div>
+              <div className="input-group">
+                <label>Payment Sheet ID</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. 1aBC...xyZ" 
+                  value={sheetIdPayment} 
+                  onChange={(e) => setSheetIdPayment(e.target.value)}
+                />
+              </div>
+              <button 
+                className={`btn-sync ${isSyncing ? 'loading' : ''}`} 
+                onClick={fetchFromSheets}
+                disabled={isSyncing}
+              >
+                <Cloud size={18} /> {isSyncing ? 'Syncing...' : 'Sync Cloud'}
+              </button>
+            </div>
+            <p className="hint">Note: Sheets must be shared as "Anyone with link can view"</p>
+          </div>
+
+          <div className="divider"><span>OR</span></div>
 
           <div className="upload-controls">
             <div className="upload-box">
@@ -961,6 +1088,87 @@ const NexoraDashboard = () => {
         }
         .team-data-card:hover .view-details {
           color: var(--primary);
+        }
+        .hint {
+          font-size: 0.75rem;
+          color: var(--text-muted);
+          margin-top: 0.5rem;
+        }
+        .divider {
+          display: flex;
+          align-items: center;
+          margin: 1.5rem 0;
+          color: var(--text-muted);
+          font-size: 0.7rem;
+          font-weight: 800;
+        }
+        .divider::before, .divider::after {
+          content: "";
+          flex: 1;
+          height: 1px;
+          background: var(--glass-border);
+          margin: 0 1rem;
+        }
+        .cloud-sync-section {
+          background: rgba(255,255,255,0.02);
+          padding: 1.5rem;
+          border-radius: 12px;
+          border: 1px dashed var(--glass-border);
+          margin-bottom: 1rem;
+        }
+        .sync-row {
+          display: grid;
+          grid-template-columns: 1fr 1fr auto;
+          gap: 1rem;
+          align-items: flex-end;
+        }
+        .input-group {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .input-group label {
+          font-size: 0.75rem;
+          color: var(--text-muted);
+          font-weight: 600;
+        }
+        .input-group input {
+          background: rgba(255,255,255,0.05);
+          border: 1px solid var(--glass-border);
+          border-radius: 8px;
+          padding: 10px 14px;
+          color: white;
+          font-size: 0.9rem;
+          width: 100%;
+        }
+        .btn-sync {
+          background: var(--primary);
+          color: white;
+          border: none;
+          padding: 11px 20px;
+          border-radius: 8px;
+          font-weight: 700;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        .btn-sync:hover:not(:disabled) {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+        }
+        .btn-sync:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+        .loading {
+          animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+          0% { opacity: 1; }
+          50% { opacity: 0.5; }
+          100% { opacity: 1; }
         }
       `}</style>
     </div>
