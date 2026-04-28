@@ -38,8 +38,8 @@ const NexoraDashboard = () => {
   const [activeTab, setActiveTab] = useState('all');
   
   // Cloud Sync States
-  const [sheetIdTeam, setSheetIdTeam] = useState(localStorage.getItem('nexora_sheet_team') || '');
-  const [sheetIdPayment, setSheetIdPayment] = useState(localStorage.getItem('nexora_sheet_payment') || '');
+  const [sheetIdTeam, setSheetIdTeam] = useState(import.meta.env.VITE_TEAM_SHEET_ID || localStorage.getItem('nexora_sheet_team') || '');
+  const [sheetIdPayment, setSheetIdPayment] = useState(import.meta.env.VITE_PAYMENT_SHEET_ID || localStorage.getItem('nexora_sheet_payment') || '');
   const [isSyncing, setIsSyncing] = useState(false);
 
   const handleFileUpload = (e, type) => {
