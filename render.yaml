@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: vibeathon-2026
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    disk:
+      name: vibe-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: RENDER
+        value: true
+      - key: NODE_VERSION
+        value: 20
