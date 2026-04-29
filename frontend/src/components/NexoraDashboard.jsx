@@ -395,7 +395,7 @@ const NexoraDashboard = () => {
   }, [mergedData, searchTerm, activeTab, attendance]);
 
   const handleRefresh = () => {
-    if (import.meta.env.VITE_TEAM_SHEET_ID) {
+    if (sheetIdTeam || import.meta.env.VITE_TEAM_SHEET_ID) {
       fetchFromSheets();
     } else if (teamData.length > 0) {
       processAndMerge();
