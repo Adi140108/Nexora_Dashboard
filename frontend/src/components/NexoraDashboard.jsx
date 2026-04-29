@@ -348,13 +348,50 @@ const NexoraDashboard = () => {
     }
   };
 
-      newAttendance[teamName] = [];
-    } else {
-      newAttendance[teamName] = members;
-    }
+  const toggleAttendance = async (teamName, memberName) => {
+    const isCurrentlyPresent = attendance[teamName]?.includes(memberName);
+    const newIsPresent = !isCurrentlyPresent;
 
-    setAttendance(newAttendance);
-    localStorage.setItem('nexora_attendance', JSON.stringify(newAttendance));
+    setAttendance(prev => {
+      const current = prev[teamName] || [];
+      const updated = newIsPresent
+        ? [...current, memberName]
+        : current.filter(m => m !== memberName);
+      return { ...prev, [teamName]: updated };
+    });
+
+    try {
+      await fetch(`${apiUrl}/api/attendance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teamName, memberName, isPresent: newIsPresent })
+      });
+    } catch (e) {
+      console.error("Sync failed", e);
+    }
+  };
+
+  const toggleFullTeamAttendance = async (teamName, membersString) => {
+    const members = membersString.split(',').map(m => m.trim());
+    const isAllPresent = attendance[teamName]?.length === members.length;
+    const newIsPresent = !isAllPresent;
+
+    setAttendance(prev => ({
+      ...prev,
+      [teamName]: newIsPresent ? members : []
+    }));
+
+    try {
+      for (const memberName of members) {
+        await fetch(`${apiUrl}/api/attendance`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ teamName, memberName, isPresent: newIsPresent })
+        });
+      }
+    } catch (e) {
+      console.error("Bulk sync failed", e);
+    }
   };
 
   const stats = useMemo(() => {
