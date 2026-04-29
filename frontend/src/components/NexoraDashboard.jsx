@@ -405,15 +405,7 @@ const NexoraDashboard = () => {
   return (
     <div className="dashboard-container">
       <header className="dashboard-header">
-        <div className="header-titles">
-          <motion.h1
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-          >
-            NEXORA DASHBOARD
-          </motion.h1>
-          <p className="subtitle">Enterprise Team Management & Payment Reconciliation</p>
-        </div>
+        <h1>NEXORA DASHBOARD</h1>
         <button className="btn-refresh" onClick={handleRefresh} disabled={isSyncing || isProcessing}>
           <RefreshCw className={(isSyncing || isProcessing) ? 'spin' : ''} size={18} />
           {(isSyncing || isProcessing) ? 'Updating...' : 'Refresh Data'}
@@ -434,37 +426,44 @@ const NexoraDashboard = () => {
           </div>
 
           <div className="cloud-sync-section">
-            <div className="sync-row">
+            <div className="import-row">
               <div className="input-group">
                 <label>Team Sheet ID</label>
-                <input
-                  type="text"
-                  placeholder="e.g. 1aBC...xyZ"
-                  value={sheetIdTeam}
+                <input 
+                  type="text" 
+                  value={sheetIdTeam} 
                   onChange={(e) => setSheetIdTeam(e.target.value)}
+                  placeholder="Enter Google Sheet ID..."
                 />
               </div>
               <div className="input-group">
                 <label>Payment Sheet ID</label>
-                <input
-                  type="text"
-                  placeholder="e.g. 1aBC...xyZ"
-                  value={sheetIdPayment}
+                <input 
+                  type="text" 
+                  value={sheetIdPayment} 
                   onChange={(e) => setSheetIdPayment(e.target.value)}
+                  placeholder="Enter Google Sheet ID..."
                 />
               </div>
               <div className="input-group">
                 <label>Master Sheet ID (Optional)</label>
-                <input
-                  type="text"
-                  placeholder="For member details..."
-                  value={sheetIdMaster}
+                <input 
+                  type="text" 
+                  value={sheetIdMaster} 
                   onChange={(e) => setSheetIdMaster(e.target.value)}
+                  placeholder="Enter Google Sheet ID..."
                 />
               </div>
-              <button className="btn-primary" onClick={handleRefresh} disabled={isSyncing || isProcessing}>
-                <RefreshCw className={(isSyncing || isProcessing) ? 'spin' : ''} size={18} />
-                {(isSyncing || isProcessing) ? 'Syncing...' : 'Sync Cloud Data'}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: '1.5rem' }}>
+              <button 
+                className={`sync-btn ${isSyncing ? 'syncing' : ''}`}
+                onClick={fetchFromSheets}
+                disabled={isSyncing}
+              >
+                <RefreshCw size={18} />
+                <span>{isSyncing ? "Syncing..." : "Sync Cloud Data"}</span>
               </button>
             </div>
             <p className="hint">Note: Sheets must be shared as "Anyone with link can view"</p>
