@@ -47,7 +47,8 @@ const NexoraDashboard = () => {
   const cleanPhone = (p) => String(p || '').replace(/[^0-9]/g, '').slice(-10);
 
   const apiUrl = useMemo(() => {
-    let url = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+    // Priority: Env Variable > Production Render URL > Localhost
+    let url = import.meta.env.VITE_API_URL || 'https://nexora-backend.onrender.com';
     if (url.endsWith('/')) url = url.slice(0, -1);
     return url;
   }, []);
