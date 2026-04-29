@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: nexora-backend
+    env: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node index.cjs
+    disk:
+      name: nexora-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: RENDER
+        value: true
+      - key: NODE_VERSION
+        value: 20
+      - key: FRONTEND_URL
+        value: https://your-app.vercel.app

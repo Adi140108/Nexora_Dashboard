@@ -16,7 +16,9 @@ import {
   History,
   ShieldCheck,
   Cloud,
-  AlertCircle
+  AlertCircle,
+  RefreshCw,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -40,7 +42,12 @@ const NexoraDashboard = () => {
   // Cloud Sync States
   const [sheetIdTeam, setSheetIdTeam] = useState(import.meta.env.VITE_TEAM_SHEET_ID || localStorage.getItem('nexora_sheet_team') || '');
   const [sheetIdPayment, setSheetIdPayment] = useState(import.meta.env.VITE_PAYMENT_SHEET_ID || localStorage.getItem('nexora_sheet_payment') || '');
+  const [sheetIdMaster, setSheetIdMaster] = useState(import.meta.env.VITE_MASTER_SHEET_ID || localStorage.getItem('nexora_sheet_master') || '');
   const [isSyncing, setIsSyncing] = useState(false);
+  const [masterData, setMasterData] = useState([]);
+  
+  const clean = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+  const cleanPhone = (p) => String(p || '').replace(/[^0-9]/g, '').slice(-10);
 
   const handleFileUpload = (e, type) => {
     const file = e.target.files[0];
@@ -56,101 +63,50 @@ const NexoraDashboard = () => {
       
       if (type === 'team') {
         setTeamData(data);
-      } else {
+      } else if (type === 'payment') {
         setPaymentData(data);
+      } else {
+        setMasterData(data);
       }
     };
     reader.readAsBinaryString(file);
   };
 
+  const deleteTeam = (teamName) => {
+    if (window.confirm(`Remove "${teamName}" from the dashboard?`)) {
+      setMergedData(prev => prev.filter(t => t.teamName !== teamName));
+    }
+  };
+
   const processAndMerge = () => {
     if (teamData.length === 0 || paymentData.length === 0) {
-      alert("Please upload both Excel files first!");
+      alert("Please upload both Team and Payment files first!");
       return;
     }
-
     setIsProcessing(true);
-    
-    try {
-      // Robust key finder helper
-      const findVal = (obj, patterns) => {
-        const key = Object.keys(obj).find(k => {
-          const normalizedK = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-          return patterns.some(p => normalizedK.includes(p));
-        });
-        return key ? obj[key] : null;
-      };
-
-      // Helper to find ALL values matching a pattern (e.g. for multiple members)
-      const findAllVals = (obj, pattern) => {
-        return Object.keys(obj)
-          .filter(k => k.toLowerCase().replace(/[^a-z0-9]/g, '').includes(pattern))
-          .map(k => obj[k])
-          .filter(v => v && String(v).trim().toLowerCase() !== 'n/a');
-      };
-
-      setTimeout(() => {
-        const merged = teamData.map(team => {
-          // 1. Identify Team Name
-          const teamIdKey = findVal(team, ['teamname', 'name', 'group', 'organization']) || team['Team Name'] || 'Unnamed Team';
-          
-          // 2. Find Payment
-          const payment = paymentData.find(p => {
-            const pIdKey = findVal(p, ['teamname', 'name', 'group', 'team']) || p['Team Name'];
-            return String(pIdKey || '').toLowerCase().trim() === String(teamIdKey || '').toLowerCase().trim();
-          });
-
-          // 3. Extract Members (could be one column or many)
-          let membersList = findAllVals(team, 'participant');
-          if (membersList.length === 0) membersList = findAllVals(team, 'member');
-          if (membersList.length === 0) membersList = [findVal(team, ['members', 'names', 'allnames']) || 'Not specified'];
-          
-          const memberString = Array.isArray(membersList) ? membersList.filter(m => m !== 'Not specified').join(', ') : String(membersList);
-
-          // 4. Extract Contact/Leader
-          const leader = findVal(team, ['leader', 'captain', 'poc', 'representative']) || membersList[0] || 'N/A';
-          const phone = findVal(team, ['phone', 'contact', 'mobile', 'whatsapp', 'number']) || 'N/A';
-          const email = findVal(team, ['email', 'mail']) || 'N/A';
-
-          return {
-            ...team,
-            paymentStatus: payment ? (findVal(payment, ['status', 'paymentstatus', 'state']) || 'Paid') : 'Pending',
-            transactionId: payment ? (findVal(payment, ['transaction', 'txid', 'reference', 'utr']) || 'N/A') : 'N/A',
-            amount: payment ? (findVal(payment, ['amount', 'fees', 'paid']) || 0) : 0,
-            teamName: String(teamIdKey),
-            members: memberString || 'Not specified',
-            leader: String(leader),
-            phone: String(phone),
-            email: String(email).toLowerCase(),
-            project: findVal(team, ['project', 'title', 'idea', 'problem']) || 'N/A',
-            domain: findVal(team, ['domain', 'track', 'category', 'theme']) || 'N/A',
-            status: findVal(team, ['status', 'qualified', 'shortlist', 'result']) || 'Applied'
-          };
-        });
-
-        setMergedData(merged);
-        setIsProcessing(false);
-      }, 800);
-    } catch (error) {
-      console.error("Merging Error:", error);
-      alert("Error processing Excel data. Please check if the columns 'Team Name' exist in both files.");
-      setIsProcessing(false);
-    }
+    // Use a small timeout to allow UI to show loading state
+    setTimeout(() => {
+      processAndMergeWithData(teamData, paymentData, masterData);
+    }, 100);
   };
 
   const fetchFromSheets = async () => {
     if (!sheetIdTeam || !sheetIdPayment) {
-      alert("Please enter both Google Sheet IDs first!");
+      alert("Please enter both Team and Payment Sheet IDs!");
       return;
     }
 
     setIsSyncing(true);
     localStorage.setItem('nexora_sheet_team', sheetIdTeam);
     localStorage.setItem('nexora_sheet_payment', sheetIdPayment);
+    if (sheetIdMaster) localStorage.setItem('nexora_sheet_master', sheetIdMaster);
 
     try {
-      const fetchCSV = async (id) => {
-        const url = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv`;
+      const fetchCSV = async (id, sheetName = null) => {
+        let url = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv`;
+        if (sheetName) {
+          url += `&sheet=${encodeURIComponent(sheetName)}`;
+        }
         const res = await fetch(url);
         if (!res.ok) throw new Error("Could not fetch sheet. Ensure it is shared as 'Anyone with the link can view'.");
         const text = await res.text();
@@ -158,15 +114,21 @@ const NexoraDashboard = () => {
         return XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
       };
 
-      const tData = await fetchCSV(sheetIdTeam);
+      // Team Sheet → fetch from Sheet7 (shortlisted 50 teams)
+      const tData = await fetchCSV(sheetIdTeam, 'Sheet7');
       const pData = await fetchCSV(sheetIdPayment);
+      let mData = [];
+      if (sheetIdMaster) {
+        try { mData = await fetchCSV(sheetIdMaster); } catch (e) { console.warn("Master sheet fetch failed", e); }
+      }
 
       setTeamData(tData);
       setPaymentData(pData);
+      setMasterData(mData);
       
       // Auto-trigger merge after fetch
       setTimeout(() => {
-         processAndMergeWithData(tData, pData);
+         processAndMergeWithData(tData, pData, mData);
       }, 500);
 
     } catch (error) {
@@ -177,53 +139,192 @@ const NexoraDashboard = () => {
     }
   };
 
-  const processAndMergeWithData = (tData, pData) => {
-    setIsProcessing(true);
-    const findVal = (obj, patterns) => {
-      const key = Object.keys(obj).find(k => {
-        const normalizedK = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-        return patterns.some(p => normalizedK.includes(p));
-      });
-      return key ? obj[key] : null;
-    };
-
-    const findAllVals = (obj, pattern) => {
-      return Object.keys(obj)
-        .filter(k => k.toLowerCase().replace(/[^a-z0-9]/g, '').includes(pattern))
-        .map(k => obj[k])
-        .filter(v => v && String(v).trim().toLowerCase() !== 'n/a');
-    };
-
-    const merged = tData.map(team => {
-      const teamIdKey = findVal(team, ['teamname', 'name', 'group', 'organization']) || team['Team Name'] || 'Unnamed Team';
-      const payment = pData.find(p => {
-        const pIdKey = findVal(p, ['teamname', 'name', 'group', 'team']) || p['Team Name'];
-        return String(pIdKey || '').toLowerCase().trim() === String(teamIdKey || '').toLowerCase().trim();
-      });
-
-      let membersList = findAllVals(team, 'participant');
-      if (membersList.length === 0) membersList = findAllVals(team, 'member');
-      if (membersList.length === 0) membersList = [findVal(team, ['members', 'names', 'allnames']) || 'Not specified'];
-      const memberString = Array.isArray(membersList) ? membersList.filter(m => m !== 'Not specified').join(', ') : String(membersList);
-
-      return {
-        ...team,
-        paymentStatus: payment ? (findVal(payment, ['status', 'paymentstatus', 'state']) || 'Paid') : 'Pending',
-        transactionId: payment ? (findVal(payment, ['transaction', 'txid', 'reference', 'utr']) || 'N/A') : 'N/A',
-        amount: payment ? (findVal(payment, ['amount', 'fees', 'paid']) || 0) : 0,
-        teamName: String(teamIdKey),
-        members: memberString || 'Not specified',
-        leader: String(findVal(team, ['leader', 'captain', 'poc', 'representative']) || membersList[0] || 'N/A'),
-        phone: String(findVal(team, ['phone', 'contact', 'mobile', 'whatsapp', 'number']) || 'N/A'),
-        email: String(findVal(team, ['email', 'mail']) || 'N/A').toLowerCase(),
-        project: findVal(team, ['project', 'title', 'idea', 'problem']) || 'N/A',
-        domain: findVal(team, ['domain', 'track', 'category', 'theme']) || 'N/A',
-        status: findVal(team, ['status', 'qualified', 'shortlist', 'result']) || 'Applied'
+  const processAndMergeWithData = (tData, pData, mData = []) => {
+    try {
+      const findVal = (obj, patterns) => {
+        const keys = Object.keys(obj);
+        const exactMatch = keys.find(k => {
+          const nk = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+          return patterns.includes(nk);
+        });
+        if (exactMatch) return obj[exactMatch];
+        const fuzzyMatch = keys.find(k => {
+          const nk = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+          return patterns.some(p => nk.includes(p));
+        });
+        return fuzzyMatch ? obj[fuzzyMatch] : null;
       };
-    });
+      const findAllVals = (obj, pattern) => {
+        return Object.keys(obj)
+          .filter(k => k.toLowerCase().replace(/[^a-z0-9]/g, '').includes(pattern))
+          .map(k => obj[k])
+          .filter(v => v && String(v).trim().toLowerCase() !== 'n/a');
+      };
+      const clean = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+      const cleanPhone = (p) => String(p || '').replace(/[^0-9]/g, '').slice(-10);
 
-    setMergedData(merged);
-    setIsProcessing(false);
+      // PRIMARY SOURCE: Team Sheet (tData) — iterate over its rows
+      const merged = tData.map(team => {
+        try {
+          const teamIdKey = findVal(team, ['teamname', 'groupname', 'organization']) || team['Team Name'] || 'Unnamed Team';
+          const targetKey = clean(teamIdKey);
+          const targetEmail = String(findVal(team, ['email', 'mail']) || '').toLowerCase().trim();
+          const targetPhone = cleanPhone(findVal(team, ['leaderphone', 'phone', 'contact', 'mobile', 'whatsapp']));
+          const targetLeader = clean(findVal(team, ['leader', 'captain', 'poc', 'representative']));
+
+          // Get basic member info from Team Sheet
+          let membersList = findAllVals(team, 'participant');
+          if (membersList.length === 0) membersList = findAllVals(team, 'member');
+          if (membersList.length === 0) membersList = [findVal(team, ['members', 'names', 'allnames']) || 'Not specified'];
+          const memberString = Array.isArray(membersList) ? membersList.filter(m => m !== 'Not specified').join(', ') : String(membersList);
+
+          let detailedMembers = [];
+          let college = 'N/A';
+          let city = 'N/A';
+          let masterPhone = null;
+          let masterEmail = null;
+
+          if (mData && mData.length > 0) {
+            let teamRows = mData.filter(r => clean(findVal(r, ['teamname', 'groupname'])) === targetKey);
+            
+            if (teamRows.length > 0) {
+              const teamIds = [...new Set(teamRows.map(r => String(findVal(r, ['teamid', 'id']) || '')).filter(Boolean))];
+              if (teamIds.length > 1) {
+                const correctId = teamIds.find(tid => {
+                  const idRows = teamRows.filter(r => String(findVal(r, ['teamid', 'id']) || '') === tid);
+                  return idRows.some(r => {
+                    const rEmail = String(findVal(r, ['candidatesemail', 'email', 'mail']) || '').toLowerCase().trim();
+                    const rPhone = cleanPhone(findVal(r, ['candidatesmobile', 'phone', 'contact', 'mobile']));
+                    return (targetEmail && rEmail === targetEmail) || (targetPhone && rPhone === targetPhone);
+                  });
+                });
+                if (correctId) {
+                  teamRows = teamRows.filter(r => String(findVal(r, ['teamid', 'id']) || '') === correctId);
+                }
+              }
+              
+              const leaderRow = teamRows.find(r => String(findVal(r, ['usertype', 'role', 'type']) || '').toLowerCase().includes('leader')) || teamRows[0];
+              if (leaderRow) {
+                masterPhone = String(findVal(leaderRow, ['candidatesmobile', 'phone', 'contact', 'mobile']) || '');
+                masterEmail = String(findVal(leaderRow, ['candidatesemail', 'email', 'mail']) || '').toLowerCase().trim();
+              }
+              
+              detailedMembers = teamRows.map(r => {
+                const candidateName = String(
+                  findVal(r, ['candidatesname', 'participantname', 'membername', 'candidatename']) ||
+                  findVal(r, ['name']) || ''
+                );
+                const userType = String(findVal(r, ['usertype', 'role', 'type']) || '').toLowerCase();
+                return {
+                  name: candidateName,
+                  email: String(findVal(r, ['candidatesemail', 'email', 'mail']) || '').toLowerCase().trim(),
+                  phone: cleanPhone(findVal(r, ['candidatesmobile', 'phone', 'contact', 'mobile'])),
+                  college: String(findVal(r, ['candidatesorganisation', 'organisation', 'college', 'university', 'institute', 'organization']) || 'N/A'),
+                  city: String(findVal(r, ['candidateslocation', 'location', 'city', 'address', 'place']) || 'N/A'),
+                  isLeader: userType.includes('leader') || userType.includes('captain'),
+                };
+              }).filter(m => m.name && clean(m.name) !== targetKey);
+
+              college = detailedMembers[0]?.college || 'N/A';
+              city = detailedMembers[0]?.city || 'N/A';
+            }
+          }
+
+          // Fallback: if no master data, use Team Sheet member names
+          if (detailedMembers.length === 0) {
+            detailedMembers = memberString.split(',').map(m => ({
+              name: m.trim(),
+              college: 'N/A',
+              city: 'N/A',
+              isLeader: false,
+            })).filter(m => m.name && m.name !== 'Not specified');
+          }
+
+          // Find matching payment from Payment Sheet (now using master fallbacks if needed)
+          const finalEmail = targetEmail || masterEmail;
+          const finalPhone = targetPhone || (masterPhone ? cleanPhone(masterPhone) : '');
+
+          const payment = pData.find(p => {
+            const pName = findVal(p, ['teamname', 'groupname']) || p['Team Name'];
+            const cleanedPName = clean(pName);
+            if (cleanedPName && targetKey && (cleanedPName === targetKey || (cleanedPName.length > 4 && targetKey.includes(cleanedPName)) || (targetKey.length > 4 && cleanedPName.includes(targetKey)))) return true;
+            
+            const pEmail = String(findVal(p, ['email', 'mail']) || '').toLowerCase().trim();
+            const pPhone = cleanPhone(findVal(p, ['phone', 'contact', 'mobile', 'whatsapp']));
+            const pLeader = clean(findVal(p, ['name', 'participant', 'leader', 'payer', 'firstname', 'lastname', 'fullname']));
+
+            // Check primary targets
+            if (finalEmail && pEmail === finalEmail) return true;
+            if (finalPhone && pPhone === finalPhone) return true;
+            if (targetLeader && pLeader === targetLeader) return true;
+            
+            // Exhaustive check across all detailed members' emails, phones, and names
+            if (detailedMembers.length > 0) {
+              for (const member of detailedMembers) {
+                if (member.email && pEmail && member.email === pEmail) return true;
+                if (member.phone && pPhone && member.phone === pPhone) return true;
+                if (member.name && pLeader && clean(member.name) === pLeader) return true;
+              }
+            }
+
+            // SUPER EXHAUSTIVE: Check ALL cells in the payment row, regardless of column headers
+            const pValues = Object.values(p).map(v => String(v).toLowerCase().trim());
+            const pValuesCleaned = pValues.map(v => clean(v));
+            const pValuesPhones = pValues.map(v => cleanPhone(v));
+
+            if (targetLeader && targetLeader.length > 3) {
+              if (pValuesCleaned.some(v => v === targetLeader || (v.length > 5 && targetLeader.includes(v)) || (targetLeader.length > 5 && v.includes(targetLeader)))) return true;
+            }
+            if (finalEmail && pValues.some(v => v === finalEmail || v.includes(finalEmail))) return true;
+            if (finalPhone && finalPhone.length >= 10 && pValuesPhones.some(v => v === finalPhone)) return true;
+
+            // Also check detailed members against ALL cells
+            if (detailedMembers.length > 0) {
+              for (const member of detailedMembers) {
+                const cName = clean(member.name);
+                if (cName && cName.length > 3 && pValuesCleaned.some(v => v === cName || (v.length > 5 && cName.includes(v)) || (cName.length > 5 && v.includes(cName)))) return true;
+                if (member.email && pValues.some(v => v === member.email || v.includes(member.email))) return true;
+                if (member.phone && member.phone.length >= 10 && pValuesPhones.some(v => v === member.phone)) return true;
+              }
+            }
+
+            return false;
+          });
+
+          const finalMembers = detailedMembers.map(m => m.name).join(', ');
+          const leader = detailedMembers.find(m => m.isLeader) || detailedMembers[0] || {};
+
+          return {
+            teamName: String(teamIdKey),
+            members: finalMembers || memberString || 'Not specified',
+            detailedMembers: detailedMembers,
+            leader: leader.name || String(findVal(team, ['leader', 'captain', 'poc', 'representative']) || membersList[0] || 'N/A'),
+            phone: targetPhone || masterPhone || String(findVal(team, ['leaderphone', 'phone', 'contact', 'mobile', 'whatsapp']) || 'N/A'),
+            email: targetEmail || masterEmail || String(findVal(team, ['email', 'mail']) || 'N/A').toLowerCase(),
+            project: findVal(team, ['project', 'title', 'idea', 'problem']) || 'N/A',
+            domain: findVal(team, ['domain', 'track', 'category', 'theme']) || 'N/A',
+            status: findVal(team, ['status', 'qualified', 'shortlist']) || 'Applied',
+            college: String(college),
+            city: String(city),
+            paymentStatus: payment ? (findVal(payment, ['status', 'paymentstatus', 'state']) || 'Paid') : 'Pending',
+            transactionId: payment ? (findVal(payment, ['transactionid', 'utr', 'txid', 'referenceid', 'transid', 'upiref', 'refno', 'receipt', 'orderid', 'paymentid']) || 'N/A') : 'N/A',
+            amount: payment ? String(findVal(payment, ['amountpaid', 'fees', 'paidamt', 'amount', 'paid']) || 0).replace(/[^0-9]/g, '') : 0,
+            paymentMode: payment ? (findVal(payment, ['mode', 'method', 'type']) || 'N/A') : 'N/A',
+          };
+        } catch (e) {
+          console.error("Row Merge Error:", e);
+          return team;
+        }
+      });
+
+      console.log("Merge Success. Teams:", merged.length);
+      setMergedData(merged);
+    } catch (err) {
+      console.error("Merge Data Error:", err);
+      alert("Error: " + err.message);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleSearchChange = (val) => {
@@ -268,13 +369,14 @@ const NexoraDashboard = () => {
 
   const stats = useMemo(() => {
     if (mergedData.length === 0) return null;
+    const presentCount = mergedData.filter(t => attendance[t.teamName] && attendance[t.teamName].length > 0).length;
     return {
       total: mergedData.length,
-      qualified: mergedData.filter(t => t.status?.toLowerCase().includes('qualified')).length,
-      shortlisted: mergedData.filter(t => t.status?.toLowerCase().includes('shortlisted')).length,
+      present: presentCount,
+      absent: mergedData.length - presentCount,
       paid: mergedData.filter(t => t.paymentStatus?.toLowerCase() === 'paid' || t.paymentStatus?.toLowerCase() === 'success').length,
     };
-  }, [mergedData]);
+  }, [mergedData, attendance]);
 
   const filteredData = useMemo(() => {
     let data = mergedData.filter(team => {
@@ -284,8 +386,6 @@ const NexoraDashboard = () => {
       return name.includes(search) || members.includes(search);
     });
 
-    if (activeTab === 'qualified') data = data.filter(t => String(t.status || '').toLowerCase().includes('qualified'));
-    if (activeTab === 'shortlisted') data = data.filter(t => String(t.status || '').toLowerCase().includes('shortlisted'));
     if (activeTab === 'paid') data = data.filter(t => String(t.paymentStatus || '').toLowerCase() === 'paid' || String(t.paymentStatus || '').toLowerCase() === 'success');
     if (activeTab === 'pending') data = data.filter(t => String(t.paymentStatus || '').toLowerCase() === 'pending');
     if (activeTab === 'present') data = data.filter(t => attendance[t.teamName] && attendance[t.teamName].length > 0);
@@ -293,6 +393,14 @@ const NexoraDashboard = () => {
 
     return data;
   }, [mergedData, searchTerm, activeTab, attendance]);
+
+  const handleRefresh = () => {
+    if (import.meta.env.VITE_TEAM_SHEET_ID) {
+      fetchFromSheets();
+    } else if (teamData.length > 0) {
+      processAndMerge();
+    }
+  };
 
   const exportMerged = () => {
     const ws = XLSX.utils.json_to_sheet(mergedData);
@@ -304,14 +412,19 @@ const NexoraDashboard = () => {
   return (
     <div className="dashboard-container">
       <header className="dashboard-header">
-        <motion.h1 
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="logo"
-        >
-          NEXORA <span className="vibe">DASHBOARD</span>
-        </motion.h1>
-        <p className="subtitle">Enterprise Team Management & Payment Reconciliation</p>
+        <div className="header-titles">
+          <motion.h1 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            NEXORA DASHBOARD
+          </motion.h1>
+          <p className="subtitle">Enterprise Team Management & Payment Reconciliation</p>
+        </div>
+        <button className="btn-refresh" onClick={handleRefresh} disabled={isSyncing || isProcessing}>
+          <RefreshCw className={(isSyncing || isProcessing) ? 'spin' : ''} size={18} />
+          {(isSyncing || isProcessing) ? 'Updating...' : 'Refresh Data'}
+        </button>
       </header>
 
       {/* Upload Section */}
@@ -347,12 +460,18 @@ const NexoraDashboard = () => {
                   onChange={(e) => setSheetIdPayment(e.target.value)}
                 />
               </div>
-              <button 
-                className={`btn-sync ${isSyncing ? 'loading' : ''}`} 
-                onClick={fetchFromSheets}
-                disabled={isSyncing}
-              >
-                <Cloud size={18} /> {isSyncing ? 'Syncing...' : 'Sync Cloud'}
+              <div className="input-group">
+                <label>Master Sheet ID (Optional)</label>
+                <input 
+                  type="text" 
+                  placeholder="For member details..." 
+                  value={sheetIdMaster} 
+                  onChange={(e) => setSheetIdMaster(e.target.value)}
+                />
+              </div>
+              <button className="btn-primary" onClick={handleRefresh} disabled={isSyncing || isProcessing}>
+                <RefreshCw className={(isSyncing || isProcessing) ? 'spin' : ''} size={18} />
+                {(isSyncing || isProcessing) ? 'Syncing...' : 'Sync Cloud Data'}
               </button>
             </div>
             <p className="hint">Note: Sheets must be shared as "Anyone with link can view"</p>
@@ -367,7 +486,7 @@ const NexoraDashboard = () => {
                 <input type="file" accept=".xlsx, .xls, .csv" onChange={(e) => handleFileUpload(e, 'team')} />
                 <div className="inner">
                   {teamData.length > 0 ? <CheckCircle className="status-icon" /> : <Upload />}
-                  <span>{teamData.length > 0 ? `${teamData.length} Teams Loaded` : 'Drop Team Excel Here'}</span>
+                  <span>{teamData.length > 0 ? `${teamData.length} Teams` : 'Team Excel'}</span>
                 </div>
               </div>
             </div>
@@ -378,7 +497,18 @@ const NexoraDashboard = () => {
                 <input type="file" accept=".xlsx, .xls, .csv" onChange={(e) => handleFileUpload(e, 'payment')} />
                 <div className="inner">
                   {paymentData.length > 0 ? <CheckCircle className="status-icon" /> : <CreditCard />}
-                  <span>{paymentData.length > 0 ? `${paymentData.length} Records Loaded` : 'Drop Payment Excel Here'}</span>
+                  <span>{paymentData.length > 0 ? `${paymentData.length} Records` : 'Payment Excel'}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="upload-box">
+              <label>Master Details (Optional)</label>
+              <div className={`file-drop ${masterData.length > 0 ? 'success' : ''}`}>
+                <input type="file" accept=".xlsx, .xls, .csv" onChange={(e) => handleFileUpload(e, 'master')} />
+                <div className="inner">
+                  {masterData.length > 0 ? <CheckCircle className="status-icon" /> : <Users />}
+                  <span>{masterData.length > 0 ? `${masterData.length} Details` : 'Master Excel'}</span>
                 </div>
               </div>
             </div>
@@ -389,7 +519,7 @@ const NexoraDashboard = () => {
             onClick={processAndMerge}
             disabled={isProcessing || !teamData.length || !paymentData.length}
           >
-            {isProcessing ? 'Synchronizing Systems...' : 'Process & Merge Data'}
+            {isProcessing ? 'Synchronizing Systems...' : 'Process & Launch Dashboard'}
             {!isProcessing && <ArrowRight size={18} />}
           </button>
         </motion.div>
@@ -411,21 +541,21 @@ const NexoraDashboard = () => {
               </div>
               <div className="stat-trend"><TrendingUp size={12} /> Live</div>
             </div>
-            <div className="stat-card glass qualified">
+            <div className="stat-card glass present">
               <div className="stat-info">
                 <CheckCircle className="stat-icon" />
                 <div>
-                  <span className="label">Qualified</span>
-                  <span className="value">{stats.qualified}</span>
+                  <span className="label">Teams Present</span>
+                  <span className="value">{stats.present}</span>
                 </div>
               </div>
             </div>
-            <div className="stat-card glass shortlisted">
+            <div className="stat-card glass absent">
               <div className="stat-info">
-                <Clock className="stat-icon" />
+                <AlertCircle className="stat-icon" />
                 <div>
-                  <span className="label">Shortlisted</span>
-                  <span className="value">{stats.shortlisted}</span>
+                  <span className="label">Teams Absent</span>
+                  <span className="value">{stats.absent}</span>
                 </div>
               </div>
             </div>
@@ -453,8 +583,7 @@ const NexoraDashboard = () => {
             </div>
             <div className="filter-tabs glass">
               <button className={activeTab === 'all' ? 'active' : ''} onClick={() => setActiveTab('all')}>All</button>
-              <button className={activeTab === 'qualified' ? 'active' : ''} onClick={() => setActiveTab('qualified')}>Qualified</button>
-              <button className={activeTab === 'shortlisted' ? 'active' : ''} onClick={() => setActiveTab('shortlisted')}>Shortlisted</button>
+
               <button className={activeTab === 'paid' ? 'active' : ''} onClick={() => setActiveTab('paid')}>Paid</button>
               <button className={activeTab === 'pending' ? 'active' : ''} onClick={() => setActiveTab('pending')}>Pending</button>
               <button className={activeTab === 'present' ? 'active' : ''} onClick={() => setActiveTab('present')}>
@@ -464,9 +593,7 @@ const NexoraDashboard = () => {
                 <AlertCircle size={14} style={{ marginRight: '4px' }} /> Absent
               </button>
             </div>
-            <button className="btn-secondary export-btn" onClick={exportMerged}>
-              <Download size={18} /> Export Merged
-            </button>
+
           </div>
 
           {/* Results Grid */}
@@ -491,22 +618,35 @@ const NexoraDashboard = () => {
                         <span className="member-count">{team.members ? team.members.split(',').length : 0} Members</span>
                       </div>
                     </div>
-                    <span className={`badge ${String(team.status || 'applied').toLowerCase()}`}>{team.status || 'Applied'}</span>
+                    <div className="header-actions">
+                      <button 
+                        className="btn-delete-icon"
+                        onClick={(e) => { e.stopPropagation(); deleteTeam(team.teamName); }}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   </div>
                   <div className="card-body">
                     <div className="project-preview">
                        <span className="domain-tag">{team.domain}</span>
                        <p className="project-name">{team.project}</p>
                     </div>
-                    <div className="payment-preview">
-                       <div className={`status-dot ${String(team.paymentStatus || 'pending').toLowerCase()}`}></div>
-                       <span className="payment-label">{team.paymentStatus}</span>
-                       {attendance[team.teamName]?.length > 0 && (
-                         <span className="attendance-badge">
-                           {attendance[team.teamName].length}/{team.members.split(',').length} Present
-                         </span>
-                       )}
-                    </div>
+                     <div className="payment-preview">
+                        <div className={`status-dot ${String(team.paymentStatus || 'pending').toLowerCase()}`}></div>
+                        <span className="payment-label">{team.paymentStatus}</span>
+                        {team.paymentStatus?.toLowerCase() === 'paid' && team.amount > 0 && (
+                          <span className="amount-tag">₹{team.amount}</span>
+                        )}
+                        {team.transactionId && team.transactionId !== 'N/A' && (
+                          <span className="utr-tag">{team.transactionId}</span>
+                        )}
+                        {attendance[team.teamName]?.length > 0 && (
+                          <span className="attendance-badge">
+                            {attendance[team.teamName].length}/{team.members.split(',').length} Present
+                          </span>
+                        )}
+                     </div>
                   </div>
                   <div className="card-footer">
                      <button 
@@ -563,24 +703,61 @@ const NexoraDashboard = () => {
               <div className="modal-body">
                 <section className="modal-section">
                   <h4><Users size={18} /> Team Composition</h4>
-                  <div className="members-list">
-                    {selectedTeam.members && selectedTeam.members !== 'Not specified' ? selectedTeam.members.split(',').map((m, i) => {
-                      const isPresent = attendance[selectedTeam.teamName]?.includes(m.trim());
-                      return (
-                        <div key={i} className={`member-item glass ${isPresent ? 'is-present' : ''}`} onClick={() => toggleAttendance(selectedTeam.teamName, m.trim())}>
-                          <div className="avatar">{m.trim().charAt(0)}</div>
-                          <div className="member-info">
-                            <span>{m.trim()}</span>
-                            {m.trim() === selectedTeam.leader && <span className="leader-label">Leader</span>}
-                          </div>
-                          <div className={`attendance-toggle ${isPresent ? 'active' : ''}`}>
-                            {isPresent ? <CheckCircle size={16} /> : <div className="circle" />}
-                          </div>
-                        </div>
-                      );
-                    }) : (
-                      <p className="muted">No member details found in the team record.</p>
-                    )}
+                  <div className="table-responsive">
+                    <table className="members-table">
+                      <thead>
+                        <tr>
+                          <th>Name</th>
+                          <th>Role</th>
+                          <th>College</th>
+                          <th className="text-center">Attendance</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedTeam.detailedMembers && selectedTeam.detailedMembers.length > 0 ? 
+                          [...selectedTeam.detailedMembers]
+                            .sort((a, b) => {
+                              if (a.name === selectedTeam.leader) return -1;
+                              if (b.name === selectedTeam.leader) return 1;
+                              return 0;
+                            })
+                            .map((member, i) => {
+                              const isPresent = attendance[selectedTeam.teamName]?.includes(member.name);
+                              return (
+                                <tr key={i} className={isPresent ? 'is-present' : ''} onClick={() => toggleAttendance(selectedTeam.teamName, member.name)}>
+                                  <td>
+                                    <div className="member-name-cell">
+                                      <div className="avatar small">{member.name.charAt(0)}</div>
+                                      <span className="m-name">{member.name}</span>
+                                    </div>
+                                  </td>
+                                  <td>
+                                    {member.name === selectedTeam.leader ? (
+                                      <span className="leader-label">Leader</span>
+                                    ) : (
+                                      <span className="member-label">Member</span>
+                                    )}
+                                  </td>
+                                  <td>
+                                    {member.college && member.college !== 'N/A' ? (
+                                      <span className="m-college">
+                                        <Database size={10} /> {member.college}
+                                      </span>
+                                    ) : <span className="muted">-</span>}
+                                  </td>
+                                  <td className="text-center">
+                                    <div className={`attendance-toggle ${isPresent ? 'active' : ''}`} style={{ margin: '0 auto' }}>
+                                      {isPresent ? <CheckCircle size={16} /> : <div className="circle" />}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            }) 
+                        : (
+                          <tr><td colSpan="4" className="muted text-center" style={{ padding: '2rem' }}>No member details available</td></tr>
+                        )}
+                      </tbody>
+                    </table>
                   </div>
                 </section>
 
@@ -630,6 +807,10 @@ const NexoraDashboard = () => {
                       <span className="label">Amount:</span>
                       <span className="val">₹{selectedTeam.amount}</span>
                     </div>
+                    <div className="detail-row">
+                      <span className="label">Mode:</span>
+                      <span className="val">{selectedTeam.paymentMode}</span>
+                    </div>
                   </section>
                 </div>
 
@@ -649,8 +830,38 @@ const NexoraDashboard = () => {
           color: white;
         }
         .dashboard-header {
-          text-align: center;
-          margin-bottom: 3rem;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 2rem;
+        }
+        .btn-refresh {
+          background: rgba(139, 92, 246, 0.2);
+          border: 1px solid rgba(139, 92, 246, 0.3);
+          color: #a78bfa;
+          padding: 8px 16px;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        .btn-refresh:hover {
+          background: rgba(139, 92, 246, 0.3);
+          transform: translateY(-2px);
+        }
+        .btn-refresh:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+        .header-titles h1 {
+          font-size: 2.5rem;
+          background: linear-gradient(135deg, #fff 0%, #a78bfa 100%);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          margin-bottom: 0.5rem;
         }
         .subtitle {
           color: var(--text-muted);
@@ -669,7 +880,7 @@ const NexoraDashboard = () => {
         }
         .upload-controls {
           display: grid;
-          grid-template-columns: 1fr 1fr;
+          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
           gap: 2rem;
           width: 100%;
         }
@@ -722,7 +933,7 @@ const NexoraDashboard = () => {
         }
         .stats-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+          grid-template-columns: repeat(4, 1fr);
           gap: 1.5rem;
           margin-bottom: 2rem;
         }
@@ -746,8 +957,8 @@ const NexoraDashboard = () => {
           width: 40px;
           height: 40px;
         }
-        .stat-card.qualified .stat-icon { color: #10b981; background: rgba(16, 185, 129, 0.1); }
-        .stat-card.shortlisted .stat-icon { color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
+        .stat-card.present .stat-icon { color: #10b981; background: rgba(16, 185, 129, 0.1); }
+        .stat-card.absent .stat-icon { color: #f43f5e; background: rgba(244, 63, 94, 0.1); }
         .stat-card.paid .stat-icon { color: #06b6d4; background: rgba(6, 182, 212, 0.1); }
         .label {
           display: block;
@@ -810,12 +1021,17 @@ const NexoraDashboard = () => {
         }
         .results-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+          grid-template-columns: repeat(3, 350px);
           gap: 1.5rem;
           margin-bottom: 3rem;
         }
         .team-data-card {
           padding: 1.5rem;
+          box-sizing: border-box;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          display: flex;
+          flex-direction: column;
         }
         .card-header {
           display: flex;
@@ -869,7 +1085,30 @@ const NexoraDashboard = () => {
         .card-footer {
           margin-top: 1.5rem;
           display: flex;
-          justify-content: flex-end;
+          justify-content: space-between;
+          align-items: center;
+          gap: 8px;
+        }
+        .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+        .btn-delete-icon {
+          background: rgba(239, 68, 68, 0.1);
+          color: #f87171;
+          border: none;
+          padding: 6px;
+          border-radius: 8px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.2s;
+        }
+        .btn-delete-icon:hover {
+          background: rgba(239, 68, 68, 0.25);
+          transform: translateY(-1px);
         }
         .btn-details {
           background: transparent;
@@ -955,37 +1194,25 @@ const NexoraDashboard = () => {
           font-size: 0.9rem;
           letter-spacing: 0.05em;
         }
-        .members-list {
-          display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-          gap: 1rem;
-        }
-        .member-item {
-          display: flex;
-          align-items: center;
-          gap: 0.8rem;
-          padding: 0.8rem;
-          border-radius: 12px;
-        }
-        .avatar {
-          width: 32px;
-          height: 32px;
-          background: var(--primary);
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-weight: 700;
-          font-size: 0.8rem;
-          flex-shrink: 0;
-        }
-        .member-info { display: flex; flex-direction: column; flex: 1; }
-        .leader-label { font-size: 0.65rem; color: var(--secondary); text-transform: uppercase; font-weight: 800; }
+        .table-responsive { width: 100%; overflow-x: auto; border-radius: 12px; border: 1px solid var(--glass-border); background: rgba(255,255,255,0.02); }
+        .members-table { width: 100%; border-collapse: collapse; text-align: left; }
+        .members-table th { padding: 1rem; color: var(--text-muted); font-size: 0.8rem; font-weight: 600; text-transform: uppercase; border-bottom: 1px solid var(--glass-border); }
+        .members-table td { padding: 1rem; vertical-align: middle; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .members-table tr:last-child td { border-bottom: none; }
+        .members-table tr { cursor: pointer; transition: all 0.2s; }
+        .members-table tr:hover { background: rgba(255,255,255,0.05); }
+        .members-table tr.is-present { background: rgba(6, 182, 212, 0.05); }
+        .members-table tr.is-present td { border-color: rgba(6, 182, 212, 0.1); }
+        .member-name-cell { display: flex; align-items: center; gap: 12px; }
+        .avatar { width: 32px; height: 32px; background: var(--primary); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.8rem; flex-shrink: 0; }
+        .avatar.small { width: 28px; height: 28px; font-size: 0.75rem; }
+        .m-name { font-weight: 600; color: white; }
+        .m-college { font-size: 0.7rem; color: #a78bfa; background: rgba(139, 92, 246, 0.1); padding: 2px 8px; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid rgba(139, 92, 246, 0.2); }
+        .leader-label { font-size: 0.7rem; color: var(--secondary); text-transform: uppercase; font-weight: 800; background: rgba(6, 182, 212, 0.1); padding: 2px 8px; border-radius: 4px; display: inline-block; }
+        .member-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; }
         .attendance-toggle { width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--glass-border); display: flex; align-items: center; justify-content: center; }
         .attendance-toggle.active { background: var(--secondary); border-color: var(--secondary); color: white; }
-        .member-item { cursor: pointer; transition: all 0.2s; }
-        .member-item:hover { background: rgba(255,255,255,0.08); }
-        .member-item.is-present { border-color: var(--secondary); background: rgba(6, 182, 212, 0.1); }
+        .text-center { text-align: center; }
         
         .modal-grid {
           display: grid;
@@ -995,9 +1222,10 @@ const NexoraDashboard = () => {
         .full-width { grid-column: 1 / -1; }
         .low-case { text-transform: lowercase; }
         .attendance-badge { margin-left: auto; font-size: 0.75rem; background: rgba(6, 182, 212, 0.1); color: var(--secondary); padding: 2px 8px; border-radius: 10px; }
-        .project-preview { margin-bottom: 1rem; }
-        .domain-tag { font-size: 0.7rem; color: var(--primary); text-transform: uppercase; font-weight: 800; letter-spacing: 0.05em; }
         .project-name { font-weight: 600; font-size: 0.95rem; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .location-meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px 0; }
+        .college-tag, .city-tag { font-size: 0.65rem; color: var(--text-muted); background: rgba(255, 255, 255, 0.05); padding: 2px 6px; border-radius: 4px; display: flex; align-items: center; gap: 4px; border: 1px solid rgba(255, 255, 255, 0.05); }
+        .domain-tag { font-size: 0.7rem; color: var(--primary); text-transform: uppercase; font-weight: 800; letter-spacing: 0.05em; }
         .glass-box {
           background: rgba(255,255,255,0.03);
           padding: 1.5rem;
@@ -1023,23 +1251,29 @@ const NexoraDashboard = () => {
         }
 
         /* Improved Card Styles */
-        .team-data-card {
-          cursor: pointer;
-          transition: all 0.3s ease;
-        }
         .team-data-card:hover {
           border-color: var(--primary);
           transform: translateY(-5px) scale(1.02);
           box-shadow: 0 15px 30px rgba(139, 92, 246, 0.2);
         }
+        .card-body {
+          flex-grow: 1;
+          display: flex;
+          flex-direction: column;
+        }
         .team-meta h3 {
           margin-bottom: 0.2rem;
         }
         .compact { margin-bottom: 0; font-size: 0.8rem; }
+        .project-preview {
+          margin-bottom: 1rem;
+        }
         .payment-preview {
+          margin-top: auto;
           display: flex;
           align-items: center;
-          gap: 0.5rem;
+          flex-wrap: wrap;
+          gap: 0.6rem;
           font-size: 0.9rem;
         }
         .status-dot {
@@ -1049,6 +1283,35 @@ const NexoraDashboard = () => {
           background: #f43f5e;
         }
         .status-dot.paid, .status-dot.success { background: #06b6d4; }
+        .amount-tag {
+          font-size: 0.75rem;
+          background: rgba(6, 182, 212, 0.1);
+          color: var(--secondary);
+          padding: 2px 6px;
+          border-radius: 4px;
+          font-weight: 700;
+        }
+        .utr-tag {
+          font-size: 0.7rem;
+          color: var(--text-muted);
+          background: rgba(255,255,255,0.05);
+          padding: 2px 6px;
+          border-radius: 4px;
+          font-family: monospace;
+          max-width: 100px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .last-sync {
+          font-size: 0.75rem;
+          color: #10b981;
+          background: rgba(16, 185, 129, 0.1);
+          padding: 4px 8px;
+          border-radius: 4px;
+          font-weight: 600;
+          margin-left: 10px;
+        }
         .view-details {
           font-size: 0.8rem;
           color: var(--text-muted);
@@ -1081,6 +1344,9 @@ const NexoraDashboard = () => {
           border-color: var(--secondary);
         }
         .card-footer {
+          margin-top: 1.5rem;
+          padding-top: 1.2rem;
+          border-top: 1px solid var(--glass-border);
           display: flex;
           justify-content: space-between;
           align-items: center;

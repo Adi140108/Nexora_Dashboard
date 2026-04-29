@@ -7,16 +7,32 @@ const path = require('path');
 const app = express();
 const port = process.env.PORT || 5000;
 
-app.use(cors());
-app.use(bodyParser.json());
+// Allow requests from Vercel frontend (and localhost for dev)
+const allowedOrigins = [
+  process.env.FRONTEND_URL || 'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5175',
+];
 
-// Serve static files from the React app
-app.use(express.static(path.join(__dirname, '../dist')));
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.some(o => origin.startsWith(o))) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS blocked: ${origin}`));
+    }
+  },
+  credentials: true
+}));
+
+app.use(bodyParser.json());
 
 // Database setup
 const isRender = process.env.RENDER === 'true';
-const dbPath = isRender 
-  ? '/data/registrations.db' 
+const dbPath = isRender
+  ? '/data/registrations.db'
   : path.resolve(__dirname, 'registrations.db');
 
 const db = new sqlite3.Database(dbPath, (err) => {
@@ -47,6 +63,11 @@ db.serialize(() => {
   )`);
 });
 
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 // API Endpoints
 app.get('/api/check-name', (req, res) => {
   const { name } = req.query;
@@ -63,11 +84,10 @@ app.get('/api/registrations', (req, res) => {
     LEFT JOIN members m ON t.id = m.team_id
     ORDER BY t.created_at DESC
   `;
-  
+
   db.all(query, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
-    
-    // Group members by team
+
     const teams = rows.reduce((acc, row) => {
       if (!acc[row.id]) {
         acc[row.id] = {
@@ -80,16 +100,18 @@ app.get('/api/registrations', (req, res) => {
           members: []
         };
       }
-      acc[row.id].members.push({
-        name: row.member_name,
-        email: row.email,
-        phone: row.phone,
-        college: row.college,
-        isCaptain: row.is_captain === 1
-      });
+      if (row.member_name) {
+        acc[row.id].members.push({
+          name: row.member_name,
+          email: row.email,
+          phone: row.phone,
+          college: row.college,
+          isCaptain: row.is_captain === 1
+        });
+      }
       return acc;
     }, {});
-    
+
     res.json(Object.values(teams));
   });
 });
@@ -116,15 +138,6 @@ app.post('/api/register', (req, res) => {
   });
 });
 
-// The "catchall" handler: for any request that doesn't
-// match one above, send back React's index.html file.
-app.use((req, res) => {
-  res.sendFile(path.join(__dirname, '../dist/index.html'));
-});
-
 app.listen(port, () => {
   console.log(`Backend running at http://localhost:${port}`);
 });
-
-// Keep process alive
-setInterval(() => {}, 1000000);

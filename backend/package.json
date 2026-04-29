@@ -1,0 +1,19 @@
+{
+  "name": "nexora-backend",
+  "version": "1.0.0",
+  "description": "Nexora Vibe-A-Thon backend API server",
+  "main": "index.cjs",
+  "scripts": {
+    "start": "node index.cjs",
+    "dev": "node index.cjs"
+  },
+  "dependencies": {
+    "body-parser": "^2.2.2",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "sqlite3": "^6.0.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
