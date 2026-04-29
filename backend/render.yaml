@@ -6,11 +6,9 @@ services:
     rootDir: backend
     buildCommand: npm install
     startCommand: node index.cjs
-    disk:
-      name: nexora-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
+      - key: DATABASE_URL
+        sync: false
       - key: RENDER
         value: true
       - key: NODE_VERSION

@@ -1,13 +1,21 @@
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg');
 const path = require('path');
 
 const app = express();
 const port = process.env.PORT || 5000;
 
-// Allow requests from Vercel frontend (and localhost for dev)
+// Database setup (PostgreSQL/Neon)
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false // Required for Neon
+  }
+});
+
+// Allow requests from Vercel frontend
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:5173',
   'http://localhost:5174',
@@ -16,7 +24,6 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
     if (allowedOrigins.some(o => origin.startsWith(o))) {
       callback(null, true);
@@ -29,55 +36,56 @@ app.use(cors({
 
 app.use(bodyParser.json());
 
-// Database setup
-const isRender = process.env.RENDER === 'true';
-const dbPath = isRender
-  ? '/data/registrations.db'
-  : path.resolve(__dirname, 'registrations.db');
-
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) console.error('Database connection error:', err);
-  else console.log(`Connected to SQLite database at ${dbPath}`);
-});
-
 // Initialize tables
-db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS teams (
-    id TEXT PRIMARY KEY,
-    name TEXT UNIQUE,
-    status TEXT,
-    payment_status TEXT,
-    payment_time TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
+const initDb = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS teams (
+        id TEXT PRIMARY KEY,
+        name TEXT UNIQUE,
+        status TEXT,
+        payment_status TEXT,
+        payment_time TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-  db.run(`CREATE TABLE IF NOT EXISTS members (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    team_id TEXT,
-    name TEXT,
-    email TEXT,
-    phone TEXT,
-    college TEXT,
-    is_captain INTEGER,
-    FOREIGN KEY(team_id) REFERENCES teams(id)
-  )`);
-});
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS members (
+        id SERIAL PRIMARY KEY,
+        team_id TEXT REFERENCES teams(id),
+        name TEXT,
+        email TEXT,
+        phone TEXT,
+        college TEXT,
+        is_captain BOOLEAN
+      )
+    `);
+    console.log('PostgreSQL Tables initialized');
+  } catch (err) {
+    console.error('Database init error:', err);
+  }
+};
+
+initDb();
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', database: 'connected' });
 });
 
 // API Endpoints
-app.get('/api/check-name', (req, res) => {
+app.get('/api/check-name', async (req, res) => {
   const { name } = req.query;
-  db.get('SELECT name FROM teams WHERE LOWER(name) = LOWER(?)', [name], (err, row) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ available: !row });
-  });
+  try {
+    const result = await pool.query('SELECT name FROM teams WHERE LOWER(name) = LOWER($1)', [name]);
+    res.json({ available: result.rows.length === 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get('/api/registrations', (req, res) => {
+app.get('/api/registrations', async (req, res) => {
   const query = `
     SELECT t.*, m.name as member_name, m.email, m.phone, m.college, m.is_captain
     FROM teams t
@@ -85,10 +93,9 @@ app.get('/api/registrations', (req, res) => {
     ORDER BY t.created_at DESC
   `;
 
-  db.all(query, [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-
-    const teams = rows.reduce((acc, row) => {
+  try {
+    const result = await pool.query(query);
+    const teams = result.rows.reduce((acc, row) => {
       if (!acc[row.id]) {
         acc[row.id] = {
           id: row.id,
@@ -106,36 +113,44 @@ app.get('/api/registrations', (req, res) => {
           email: row.email,
           phone: row.phone,
           college: row.college,
-          isCaptain: row.is_captain === 1
+          isCaptain: row.is_captain
         });
       }
       return acc;
     }, {});
-
     res.json(Object.values(teams));
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/register', (req, res) => {
+app.post('/api/register', async (req, res) => {
   const { teamId, teamName, members, transactionId, paymentTimestamp, status, paymentStatus } = req.body;
 
-  db.serialize(() => {
-    const stmt = db.prepare('INSERT INTO teams (id, name, status, payment_status, payment_time) VALUES (?, ?, ?, ?, ?)');
-    stmt.run(teamId, teamName, status, paymentStatus, paymentTimestamp, function(err) {
-      if (err) {
-        return res.status(400).json({ error: 'Team name already exists or database error.' });
-      }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    await client.query(
+      'INSERT INTO teams (id, name, status, payment_status, payment_time) VALUES ($1, $2, $3, $4, $5)',
+      [teamId, teamName, status, paymentStatus, paymentTimestamp]
+    );
 
-      const memberStmt = db.prepare('INSERT INTO members (team_id, name, email, phone, college, is_captain) VALUES (?, ?, ?, ?, ?, ?)');
-      members.forEach(m => {
-        memberStmt.run(teamId, m.name, m.email, m.phone, m.college, m.isCaptain ? 1 : 0);
-      });
-      memberStmt.finalize();
+    for (const m of members) {
+      await client.query(
+        'INSERT INTO members (team_id, name, email, phone, college, is_captain) VALUES ($1, $2, $3, $4, $5, $6)',
+        [teamId, m.name, m.email, m.phone, m.college, !!m.isCaptain]
+      );
+    }
 
-      res.json({ success: true, teamId });
-    });
-    stmt.finalize();
-  });
+    await client.query('COMMIT');
+    res.json({ success: true, teamId });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: 'Team name already exists or database error.' });
+  } finally {
+    client.release();
+  }
 });
 
 app.listen(port, () => {
