@@ -53,7 +53,7 @@ const NexoraDashboard = () => {
     return url;
   }, []);
 
-  // Fetch initial attendance from backend
+  // Fetch attendance from backend with Auto-Sync (Polling)
   React.useEffect(() => {
     const fetchAttendance = async () => {
       try {
@@ -66,7 +66,13 @@ const NexoraDashboard = () => {
         console.error("Failed to fetch shared attendance", e);
       }
     };
+
+    // Initial fetch
     fetchAttendance();
+
+    // Set up polling every 5 seconds for live updates
+    const interval = setInterval(fetchAttendance, 5000);
+    return () => clearInterval(interval);
   }, [apiUrl]);
 
   const handleFileUpload = (e, type) => {
