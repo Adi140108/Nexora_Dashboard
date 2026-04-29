@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg');
 const { google } = require('googleapis');
 const path = require('path');
 
@@ -10,10 +10,12 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // Database setup (PostgreSQL/Neon)
-// Database setup (SQLite for Local)
-const db = new sqlite3.Database('./registrations.db', (err) => {
-  if (err) console.error('Database open error:', err);
-  else console.log('Connected to local SQLite database');
+// Database setup (PostgreSQL/Neon)
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false // Required for Neon
+  }
 });
 
 // Allow requests from Vercel frontend
@@ -39,33 +41,34 @@ app.use(bodyParser.json());
 
 // Initialize tables
 // Initialize tables
-const initDb = () => {
-  db.serialize(() => {
-    db.run(`
+const initDb = async () => {
+  try {
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS teams (
         id TEXT PRIMARY KEY,
         name TEXT UNIQUE,
         status TEXT,
         payment_status TEXT,
         payment_time TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
 
-    db.run(`
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS members (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        team_id TEXT,
+        id SERIAL PRIMARY KEY,
+        team_id TEXT REFERENCES teams(id),
         name TEXT,
         email TEXT,
         phone TEXT,
         college TEXT,
-        is_captain BOOLEAN,
-        FOREIGN KEY(team_id) REFERENCES teams(id)
+        is_captain BOOLEAN
       )
     `);
-    console.log('SQLite Tables initialized');
-  });
+    console.log('PostgreSQL Tables initialized');
+  } catch (err) {
+    console.error('Database init error:', err);
+  }
 };
 
 initDb();
@@ -139,26 +142,27 @@ app.get('/api/sync-sheets', async (req, res) => {
 });
 
 // API Endpoints
-app.get('/api/check-name', (req, res) => {
+app.get('/api/check-name', async (req, res) => {
   const { name } = req.query;
-  db.get('SELECT name FROM teams WHERE LOWER(name) = LOWER(?)', [name], (err, row) => {
-    if (err) res.status(500).json({ error: err.message });
-    else res.json({ available: !row });
-  });
+  try {
+    const result = await pool.query('SELECT name FROM teams WHERE LOWER(name) = LOWER($1)', [name]);
+    res.json({ available: result.rows.length === 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get('/api/registrations', (req, res) => {
+app.get('/api/registrations', async (req, res) => {
   const query = `
-    SELECT t.*, m.name as member_name, m.email as m_email, m.phone as m_phone, m.college as m_college, m.is_captain
+    SELECT t.*, m.name as member_name, m.email, m.phone, m.college, m.is_captain
     FROM teams t
     LEFT JOIN members m ON t.id = m.team_id
     ORDER BY t.created_at DESC
   `;
 
-  db.all(query, [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    
-    const teams = rows.reduce((acc, row) => {
+  try {
+    const result = await pool.query(query);
+    const teams = result.rows.reduce((acc, row) => {
       if (!acc[row.id]) {
         acc[row.id] = {
           id: row.id,
@@ -173,44 +177,47 @@ app.get('/api/registrations', (req, res) => {
       if (row.member_name) {
         acc[row.id].members.push({
           name: row.member_name,
-          email: row.m_email,
-          phone: row.m_phone,
-          college: row.m_college,
+          email: row.email,
+          phone: row.phone,
+          college: row.college,
           isCaptain: row.is_captain
         });
       }
       return acc;
     }, {});
     res.json(Object.values(teams));
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/register', (req, res) => {
+app.post('/api/register', async (req, res) => {
   const { teamId, teamName, members, transactionId, paymentTimestamp, status, paymentStatus } = req.body;
 
-  db.serialize(() => {
-    db.run('BEGIN TRANSACTION');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
     
-    const stmt1 = db.prepare('INSERT INTO teams (id, name, status, payment_status, payment_time) VALUES (?, ?, ?, ?, ?)');
-    stmt1.run([teamId, teamName, status, paymentStatus, paymentTimestamp], function(err) {
-      if (err) {
-        db.run('ROLLBACK');
-        return res.status(400).json({ error: 'Team name already exists.' });
-      }
+    await client.query(
+      'INSERT INTO teams (id, name, status, payment_status, payment_time) VALUES ($1, $2, $3, $4, $5)',
+      [teamId, teamName, status, paymentStatus, paymentTimestamp]
+    );
 
-      const stmt2 = db.prepare('INSERT INTO members (team_id, name, email, phone, college, is_captain) VALUES (?, ?, ?, ?, ?, ?)');
-      for (const m of members) {
-        stmt2.run([teamId, m.name, m.email, m.phone, m.college, !!m.isCaptain]);
-      }
-      stmt2.finalize();
-      
-      db.run('COMMIT', (err) => {
-        if (err) res.status(500).json({ error: err.message });
-        else res.json({ success: true, teamId });
-      });
-    });
-    stmt1.finalize();
-  });
+    for (const m of members) {
+      await client.query(
+        'INSERT INTO members (team_id, name, email, phone, college, is_captain) VALUES ($1, $2, $3, $4, $5, $6)',
+        [teamId, m.name, m.email, m.phone, m.college, !!m.isCaptain]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true, teamId });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: 'Team name already exists or database error.' });
+  } finally {
+    client.release();
+  }
 });
 
 app.listen(port, () => {
