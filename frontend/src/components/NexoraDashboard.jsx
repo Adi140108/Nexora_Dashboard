@@ -102,7 +102,10 @@ const NexoraDashboard = () => {
     if (sheetIdMaster) localStorage.setItem('nexora_sheet_master', sheetIdMaster);
 
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+      let apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+      // Remove trailing slash if present
+      if (apiUrl.endsWith('/')) apiUrl = apiUrl.slice(0, -1);
+      
       const response = await fetch(`${apiUrl}/api/sync-sheets?teamId=${sheetIdTeam}&paymentId=${sheetIdPayment}&masterId=${sheetIdMaster}`);
       
       if (!response.ok) {

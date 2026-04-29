@@ -27,8 +27,8 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.some(o => origin.startsWith(o))) {
+    // Allow localhost or any Vercel URL
+    if (!origin || origin.startsWith('http://localhost') || origin.endsWith('.vercel.app')) {
       callback(null, true);
     } else {
       callback(new Error(`CORS blocked: ${origin}`));
