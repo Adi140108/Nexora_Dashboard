@@ -65,6 +65,16 @@ const initDb = async () => {
         is_captain BOOLEAN
       )
     `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS attendance (
+        id SERIAL PRIMARY KEY,
+        team_name TEXT,
+        member_name TEXT,
+        marked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(team_name, member_name)
+      )
+    `);
     console.log('PostgreSQL Tables initialized');
   } catch (err) {
     console.error('Database init error:', err);
@@ -217,6 +227,42 @@ app.post('/api/register', async (req, res) => {
     res.status(400).json({ error: 'Team name already exists or database error.' });
   } finally {
     client.release();
+  }
+});
+
+// Get all attendance
+app.get('/api/attendance', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT team_name, member_name FROM attendance');
+    const attendance = result.rows.reduce((acc, row) => {
+      if (!acc[row.team_name]) acc[row.team_name] = [];
+      acc[row.team_name].push(row.member_name);
+      return acc;
+    }, {});
+    res.json(attendance);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Toggle attendance
+app.post('/api/attendance', async (req, res) => {
+  const { teamName, memberName, isPresent } = req.body;
+  try {
+    if (isPresent) {
+      await pool.query(
+        'INSERT INTO attendance (team_name, member_name) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [teamName, memberName]
+      );
+    } else {
+      await pool.query(
+        'DELETE FROM attendance WHERE team_name = $1 AND member_name = $2',
+        [teamName, memberName]
+      );
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

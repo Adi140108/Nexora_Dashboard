@@ -28,10 +28,7 @@ const NexoraDashboard = () => {
   const [mergedData, setMergedData] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedTeam, setSelectedTeam] = useState(null);
-  const [attendance, setAttendance] = useState(() => {
-    const saved = localStorage.getItem('nexora_attendance');
-    return saved ? JSON.parse(saved) : {};
-  });
+  const [attendance, setAttendance] = useState({});
   const [recentSearches, setRecentSearches] = useState(() => {
     const saved = localStorage.getItem('nexora_recent_searches');
     return saved ? JSON.parse(saved) : [];
@@ -48,6 +45,28 @@ const NexoraDashboard = () => {
 
   const clean = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
   const cleanPhone = (p) => String(p || '').replace(/[^0-9]/g, '').slice(-10);
+
+  const apiUrl = useMemo(() => {
+    let url = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+    if (url.endsWith('/')) url = url.slice(0, -1);
+    return url;
+  }, []);
+
+  // Fetch initial attendance from backend
+  React.useEffect(() => {
+    const fetchAttendance = async () => {
+      try {
+        const res = await fetch(`${apiUrl}/api/attendance`);
+        if (res.ok) {
+          const data = await res.json();
+          setAttendance(data);
+        }
+      } catch (e) {
+        console.error("Failed to fetch shared attendance", e);
+      }
+    };
+    fetchAttendance();
+  }, [apiUrl]);
 
   const handleFileUpload = (e, type) => {
     const file = e.target.files[0];
@@ -329,28 +348,6 @@ const NexoraDashboard = () => {
     }
   };
 
-  const toggleAttendance = (teamName, memberName) => {
-    const newAttendance = { ...attendance };
-    if (!newAttendance[teamName]) newAttendance[teamName] = [];
-
-    if (newAttendance[teamName].includes(memberName)) {
-      newAttendance[teamName] = newAttendance[teamName].filter(m => m !== memberName);
-    } else {
-      newAttendance[teamName].push(memberName);
-    }
-
-    setAttendance(newAttendance);
-    localStorage.setItem('nexora_attendance', JSON.stringify(newAttendance));
-  };
-
-  const toggleFullTeamAttendance = (teamName, memberString) => {
-    const members = memberString.split(',').map(m => m.trim());
-    const newAttendance = { ...attendance };
-
-    // If some or all are missing, mark all present. If all are present, mark all absent.
-    const allPresent = members.every(m => newAttendance[teamName]?.includes(m));
-
-    if (allPresent) {
       newAttendance[teamName] = [];
     } else {
       newAttendance[teamName] = members;
