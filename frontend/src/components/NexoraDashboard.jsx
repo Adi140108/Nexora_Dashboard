@@ -1,12 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import { 
-  Upload, 
-  Search, 
-  Users, 
-  CheckCircle, 
-  Clock, 
-  CreditCard, 
+import {
+  Upload,
+  Search,
+  Users,
+  CheckCircle,
+  Clock,
+  CreditCard,
   Filter,
   Download,
   Database,
@@ -38,14 +38,14 @@ const NexoraDashboard = () => {
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
-  
+
   // Cloud Sync States
   const [sheetIdTeam, setSheetIdTeam] = useState(import.meta.env.VITE_TEAM_SHEET_ID || localStorage.getItem('nexora_sheet_team') || '');
   const [sheetIdPayment, setSheetIdPayment] = useState(import.meta.env.VITE_PAYMENT_SHEET_ID || localStorage.getItem('nexora_sheet_payment') || '');
   const [sheetIdMaster, setSheetIdMaster] = useState(import.meta.env.VITE_MASTER_SHEET_ID || localStorage.getItem('nexora_sheet_master') || '');
   const [isSyncing, setIsSyncing] = useState(false);
   const [masterData, setMasterData] = useState([]);
-  
+
   const clean = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
   const cleanPhone = (p) => String(p || '').replace(/[^0-9]/g, '').slice(-10);
 
@@ -60,7 +60,7 @@ const NexoraDashboard = () => {
       const wsname = wb.SheetNames[0];
       const ws = wb.Sheets[wsname];
       const data = XLSX.utils.sheet_to_json(ws);
-      
+
       if (type === 'team') {
         setTeamData(data);
       } else if (type === 'payment') {
@@ -102,25 +102,15 @@ const NexoraDashboard = () => {
     if (sheetIdMaster) localStorage.setItem('nexora_sheet_master', sheetIdMaster);
 
     try {
-      const fetchCSV = async (id, sheetName = null) => {
-        let url = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv`;
-        if (sheetName) {
-          url += `&sheet=${encodeURIComponent(sheetName)}`;
-        }
-        const res = await fetch(url);
-        if (!res.ok) throw new Error("Could not fetch sheet. Ensure it is shared as 'Anyone with the link can view'.");
-        const text = await res.text();
-        const workbook = XLSX.read(text, { type: 'string' });
-        return XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
-      };
-
-      // Team Sheet → fetch from Sheet7 (shortlisted 50 teams)
-      const tData = await fetchCSV(sheetIdTeam, 'Sheet7');
-      const pData = await fetchCSV(sheetIdPayment);
-      let mData = [];
-      if (sheetIdMaster) {
-        try { mData = await fetchCSV(sheetIdMaster); } catch (e) { console.warn("Master sheet fetch failed", e); }
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+      const response = await fetch(`${apiUrl}/api/sync-sheets?teamId=${sheetIdTeam}&paymentId=${sheetIdPayment}&masterId=${sheetIdMaster}`);
+      
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || "Failed to sync sheets through backend");
       }
+
+      const { teamData: tData, paymentData: pData, masterData: mData } = await response.json();
 
       setTeamData(tData);
       setPaymentData(pData);
@@ -133,7 +123,7 @@ const NexoraDashboard = () => {
 
     } catch (error) {
       console.error("Cloud Sync Error:", error);
-      alert(error.message);
+      alert("Backend Sync Failed: " + error.message);
     } finally {
       setIsSyncing(false);
     }
@@ -186,7 +176,7 @@ const NexoraDashboard = () => {
 
           if (mData && mData.length > 0) {
             let teamRows = mData.filter(r => clean(findVal(r, ['teamname', 'groupname'])) === targetKey);
-            
+
             if (teamRows.length > 0) {
               const teamIds = [...new Set(teamRows.map(r => String(findVal(r, ['teamid', 'id']) || '')).filter(Boolean))];
               if (teamIds.length > 1) {
@@ -202,13 +192,13 @@ const NexoraDashboard = () => {
                   teamRows = teamRows.filter(r => String(findVal(r, ['teamid', 'id']) || '') === correctId);
                 }
               }
-              
+
               const leaderRow = teamRows.find(r => String(findVal(r, ['usertype', 'role', 'type']) || '').toLowerCase().includes('leader')) || teamRows[0];
               if (leaderRow) {
                 masterPhone = String(findVal(leaderRow, ['candidatesmobile', 'phone', 'contact', 'mobile']) || '');
                 masterEmail = String(findVal(leaderRow, ['candidatesemail', 'email', 'mail']) || '').toLowerCase().trim();
               }
-              
+
               detailedMembers = teamRows.map(r => {
                 const candidateName = String(
                   findVal(r, ['candidatesname', 'participantname', 'membername', 'candidatename']) ||
@@ -248,7 +238,7 @@ const NexoraDashboard = () => {
             const pName = findVal(p, ['teamname', 'groupname']) || p['Team Name'];
             const cleanedPName = clean(pName);
             if (cleanedPName && targetKey && (cleanedPName === targetKey || (cleanedPName.length > 4 && targetKey.includes(cleanedPName)) || (targetKey.length > 4 && cleanedPName.includes(targetKey)))) return true;
-            
+
             const pEmail = String(findVal(p, ['email', 'mail']) || '').toLowerCase().trim();
             const pPhone = cleanPhone(findVal(p, ['phone', 'contact', 'mobile', 'whatsapp']));
             const pLeader = clean(findVal(p, ['name', 'participant', 'leader', 'payer', 'firstname', 'lastname', 'fullname']));
@@ -257,7 +247,7 @@ const NexoraDashboard = () => {
             if (finalEmail && pEmail === finalEmail) return true;
             if (finalPhone && pPhone === finalPhone) return true;
             if (targetLeader && pLeader === targetLeader) return true;
-            
+
             // Exhaustive check across all detailed members' emails, phones, and names
             if (detailedMembers.length > 0) {
               for (const member of detailedMembers) {
@@ -339,13 +329,13 @@ const NexoraDashboard = () => {
   const toggleAttendance = (teamName, memberName) => {
     const newAttendance = { ...attendance };
     if (!newAttendance[teamName]) newAttendance[teamName] = [];
-    
+
     if (newAttendance[teamName].includes(memberName)) {
       newAttendance[teamName] = newAttendance[teamName].filter(m => m !== memberName);
     } else {
       newAttendance[teamName].push(memberName);
     }
-    
+
     setAttendance(newAttendance);
     localStorage.setItem('nexora_attendance', JSON.stringify(newAttendance));
   };
@@ -353,16 +343,16 @@ const NexoraDashboard = () => {
   const toggleFullTeamAttendance = (teamName, memberString) => {
     const members = memberString.split(',').map(m => m.trim());
     const newAttendance = { ...attendance };
-    
+
     // If some or all are missing, mark all present. If all are present, mark all absent.
     const allPresent = members.every(m => newAttendance[teamName]?.includes(m));
-    
+
     if (allPresent) {
       newAttendance[teamName] = [];
     } else {
       newAttendance[teamName] = members;
     }
-    
+
     setAttendance(newAttendance);
     localStorage.setItem('nexora_attendance', JSON.stringify(newAttendance));
   };
@@ -413,7 +403,7 @@ const NexoraDashboard = () => {
     <div className="dashboard-container">
       <header className="dashboard-header">
         <div className="header-titles">
-          <motion.h1 
+          <motion.h1
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
           >
@@ -429,7 +419,7 @@ const NexoraDashboard = () => {
 
       {/* Upload Section */}
       {mergedData.length === 0 ? (
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           className="upload-grid glass card"
@@ -444,28 +434,28 @@ const NexoraDashboard = () => {
             <div className="sync-row">
               <div className="input-group">
                 <label>Team Sheet ID</label>
-                <input 
-                  type="text" 
-                  placeholder="e.g. 1aBC...xyZ" 
-                  value={sheetIdTeam} 
+                <input
+                  type="text"
+                  placeholder="e.g. 1aBC...xyZ"
+                  value={sheetIdTeam}
                   onChange={(e) => setSheetIdTeam(e.target.value)}
                 />
               </div>
               <div className="input-group">
                 <label>Payment Sheet ID</label>
-                <input 
-                  type="text" 
-                  placeholder="e.g. 1aBC...xyZ" 
-                  value={sheetIdPayment} 
+                <input
+                  type="text"
+                  placeholder="e.g. 1aBC...xyZ"
+                  value={sheetIdPayment}
                   onChange={(e) => setSheetIdPayment(e.target.value)}
                 />
               </div>
               <div className="input-group">
                 <label>Master Sheet ID (Optional)</label>
-                <input 
-                  type="text" 
-                  placeholder="For member details..." 
-                  value={sheetIdMaster} 
+                <input
+                  type="text"
+                  placeholder="For member details..."
+                  value={sheetIdMaster}
                   onChange={(e) => setSheetIdMaster(e.target.value)}
                 />
               </div>
@@ -514,8 +504,8 @@ const NexoraDashboard = () => {
             </div>
           </div>
 
-          <button 
-            className="btn-primary merge-btn" 
+          <button
+            className="btn-primary merge-btn"
             onClick={processAndMerge}
             disabled={isProcessing || !teamData.length || !paymentData.length}
           >
@@ -526,7 +516,7 @@ const NexoraDashboard = () => {
       ) : (
         <div className="dashboard-content">
           {/* Stats Bar */}
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             className="stats-grid"
@@ -574,9 +564,9 @@ const NexoraDashboard = () => {
           <div className="actions-bar">
             <div className="search-box glass">
               <Search className="search-icon" size={18} />
-              <input 
-                type="text" 
-                placeholder="Search by Team Name or Member..." 
+              <input
+                type="text"
+                placeholder="Search by Team Name or Member..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
@@ -600,7 +590,7 @@ const NexoraDashboard = () => {
           <div className="results-grid">
             <AnimatePresence mode='popLayout'>
               {filteredData.map((team, idx) => (
-                <motion.div 
+                <motion.div
                   key={team.teamName + idx}
                   layout
                   initial={{ opacity: 0, scale: 0.9 }}
@@ -619,7 +609,7 @@ const NexoraDashboard = () => {
                       </div>
                     </div>
                     <div className="header-actions">
-                      <button 
+                      <button
                         className="btn-delete-icon"
                         onClick={(e) => { e.stopPropagation(); deleteTeam(team.teamName); }}
                       >
@@ -629,34 +619,34 @@ const NexoraDashboard = () => {
                   </div>
                   <div className="card-body">
                     <div className="project-preview">
-                       <span className="domain-tag">{team.domain}</span>
-                       <p className="project-name">{team.project}</p>
+                      <span className="domain-tag">{team.domain}</span>
+                      <p className="project-name">{team.project}</p>
                     </div>
-                     <div className="payment-preview">
-                        <div className={`status-dot ${String(team.paymentStatus || 'pending').toLowerCase()}`}></div>
-                        <span className="payment-label">{team.paymentStatus}</span>
-                        {team.paymentStatus?.toLowerCase() === 'paid' && team.amount > 0 && (
-                          <span className="amount-tag">₹{team.amount}</span>
-                        )}
-                        {team.transactionId && team.transactionId !== 'N/A' && (
-                          <span className="utr-tag">{team.transactionId}</span>
-                        )}
-                        {attendance[team.teamName]?.length > 0 && (
-                          <span className="attendance-badge">
-                            {attendance[team.teamName].length}/{team.members.split(',').length} Present
-                          </span>
-                        )}
-                     </div>
+                    <div className="payment-preview">
+                      <div className={`status-dot ${String(team.paymentStatus || 'pending').toLowerCase()}`}></div>
+                      <span className="payment-label">{team.paymentStatus}</span>
+                      {team.paymentStatus?.toLowerCase() === 'paid' && team.amount > 0 && (
+                        <span className="amount-tag">₹{team.amount}</span>
+                      )}
+                      {team.transactionId && team.transactionId !== 'N/A' && (
+                        <span className="utr-tag">{team.transactionId}</span>
+                      )}
+                      {attendance[team.teamName]?.length > 0 && (
+                        <span className="attendance-badge">
+                          {attendance[team.teamName].length}/{team.members.split(',').length} Present
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="card-footer">
-                     <button 
-                       className={`btn-attendance ${attendance[team.teamName]?.length === team.members.split(',').length ? 'all' : ''}`}
-                       onClick={(e) => { e.stopPropagation(); toggleFullTeamAttendance(team.teamName, team.members); }}
-                     >
-                       {attendance[team.teamName]?.length > 0 ? <CheckCircle size={14} /> : <Users size={14} />}
-                       {attendance[team.teamName]?.length === team.members.split(',').length ? 'All Present' : 'Mark Present'}
-                     </button>
-                     <span className="view-details" onClick={() => setSelectedTeam(team)}>Insights <ArrowRight size={14} /></span>
+                    <button
+                      className={`btn-attendance ${attendance[team.teamName]?.length === team.members.split(',').length ? 'all' : ''}`}
+                      onClick={(e) => { e.stopPropagation(); toggleFullTeamAttendance(team.teamName, team.members); }}
+                    >
+                      {attendance[team.teamName]?.length > 0 ? <CheckCircle size={14} /> : <Users size={14} />}
+                      {attendance[team.teamName]?.length === team.members.split(',').length ? 'All Present' : 'Mark Present'}
+                    </button>
+                    <span className="view-details" onClick={() => setSelectedTeam(team)}>Insights <ArrowRight size={14} /></span>
                   </div>
                 </motion.div>
               ))}
@@ -668,8 +658,8 @@ const NexoraDashboard = () => {
               </div>
             )}
           </div>
-          
-          <button className="btn-ghost reset-btn" onClick={() => {setMergedData([]); setTeamData([]); setPaymentData([]);}}>
+
+          <button className="btn-ghost reset-btn" onClick={() => { setMergedData([]); setTeamData([]); setPaymentData([]); }}>
             Upload New Files
           </button>
         </div>
@@ -678,14 +668,14 @@ const NexoraDashboard = () => {
       {/* Team Detail Modal */}
       <AnimatePresence>
         {selectedTeam && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="modal-overlay"
             onClick={() => setSelectedTeam(null)}
           >
-            <motion.div 
+            <motion.div
               initial={{ scale: 0.9, y: 20 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.9, y: 20 }}
@@ -714,7 +704,7 @@ const NexoraDashboard = () => {
                         </tr>
                       </thead>
                       <tbody>
-                        {selectedTeam.detailedMembers && selectedTeam.detailedMembers.length > 0 ? 
+                        {selectedTeam.detailedMembers && selectedTeam.detailedMembers.length > 0 ?
                           [...selectedTeam.detailedMembers]
                             .sort((a, b) => {
                               if (a.name === selectedTeam.leader) return -1;
@@ -752,10 +742,10 @@ const NexoraDashboard = () => {
                                   </td>
                                 </tr>
                               );
-                            }) 
-                        : (
-                          <tr><td colSpan="4" className="muted text-center" style={{ padding: '2rem' }}>No member details available</td></tr>
-                        )}
+                            })
+                          : (
+                            <tr><td colSpan="4" className="muted text-center" style={{ padding: '2rem' }}>No member details available</td></tr>
+                          )}
                       </tbody>
                     </table>
                   </div>
@@ -791,36 +781,36 @@ const NexoraDashboard = () => {
                   </section>
                 </div>
 
-                  <section className="modal-section glass-box full-width">
-                    <h4><CreditCard size={18} /> Financial Status</h4>
-                    <div className="detail-row">
-                      <span className="label">Payment Status:</span>
-                      <span className={`val payment-status ${String(selectedTeam.paymentStatus || 'pending').toLowerCase()}`}>
-                        {selectedTeam.paymentStatus || 'Pending'}
-                      </span>
-                    </div>
-                    <div className="detail-row">
-                      <span className="label">Transaction ID:</span>
-                      <span className="val mono">{selectedTeam.transactionId}</span>
-                    </div>
-                    <div className="detail-row">
-                      <span className="label">Amount:</span>
-                      <span className="val">₹{selectedTeam.amount}</span>
-                    </div>
-                    <div className="detail-row">
-                      <span className="label">Mode:</span>
-                      <span className="val">{selectedTeam.paymentMode}</span>
-                    </div>
-                  </section>
-                </div>
+                <section className="modal-section glass-box full-width">
+                  <h4><CreditCard size={18} /> Financial Status</h4>
+                  <div className="detail-row">
+                    <span className="label">Payment Status:</span>
+                    <span className={`val payment-status ${String(selectedTeam.paymentStatus || 'pending').toLowerCase()}`}>
+                      {selectedTeam.paymentStatus || 'Pending'}
+                    </span>
+                  </div>
+                  <div className="detail-row">
+                    <span className="label">Transaction ID:</span>
+                    <span className="val mono">{selectedTeam.transactionId}</span>
+                  </div>
+                  <div className="detail-row">
+                    <span className="label">Amount:</span>
+                    <span className="val">₹{selectedTeam.amount}</span>
+                  </div>
+                  <div className="detail-row">
+                    <span className="label">Mode:</span>
+                    <span className="val">{selectedTeam.paymentMode}</span>
+                  </div>
+                </section>
+              </div>
 
-                <div className="modal-footer">
-                  <button className="btn-primary" onClick={() => window.print()}>Print Report</button>
-                </div>
-              </motion.div>
+              <div className="modal-footer">
+                <button className="btn-primary" onClick={() => window.print()}>Print Report</button>
+              </div>
             </motion.div>
-          )}
-        </AnimatePresence>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <style>{`
         .dashboard-container {
