@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import {
   Upload,
@@ -41,7 +41,19 @@ const NexoraDashboard = () => {
   const [domainFilter, setDomainFilter] = useState('all');
   const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [showDomainMenu, setShowDomainMenu] = useState(false);
+  const filterMenuRef = useRef(null);
 
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showFilterMenu && filterMenuRef.current && !filterMenuRef.current.contains(event.target)) {
+        closeFilterMenu();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showFilterMenu]);
   // Cloud Sync States
   const [sheetIdTeam, setSheetIdTeam] = useState(import.meta.env.VITE_TEAM_SHEET_ID || localStorage.getItem('nexora_sheet_team') || '');
   const [sheetIdPayment, setSheetIdPayment] = useState(import.meta.env.VITE_PAYMENT_SHEET_ID || localStorage.getItem('nexora_sheet_payment') || '');
@@ -57,6 +69,49 @@ const NexoraDashboard = () => {
     let url = import.meta.env.VITE_API_URL || 'https://nexora-backend.onrender.com';
     if (url.endsWith('/')) url = url.slice(0, -1);
     return url;
+  }, []);
+
+  const openTeamModal = (team) => {
+    setSelectedTeam(team);
+    window.history.pushState({ modalOpen: true }, '', '#team-details');
+  };
+
+  const closeTeamModal = () => {
+    setSelectedTeam(null);
+    if (window.location.hash === '#team-details') {
+      window.history.back();
+    }
+  };
+
+  const toggleFilterMenu = () => {
+    if (!showFilterMenu) {
+      setShowFilterMenu(true);
+      window.history.pushState({ filterMenuOpen: true }, '', '#filter-menu');
+    } else {
+      closeFilterMenu();
+    }
+  };
+
+  const closeFilterMenu = () => {
+    setShowFilterMenu(false);
+    setShowDomainMenu(false);
+    if (window.location.hash === '#filter-menu') {
+      window.history.back();
+    }
+  };
+
+  useEffect(() => {
+    const handlePopState = () => {
+      if (window.location.hash !== '#team-details') {
+        setSelectedTeam(null);
+      }
+      if (window.location.hash !== '#filter-menu') {
+        setShowFilterMenu(false);
+        setShowDomainMenu(false);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
   const handlePrintAttendance = () => {
@@ -728,8 +783,8 @@ const NexoraDashboard = () => {
       {/* Upload Section */}
       {mergedData.length === 0 ? (
         <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
           className="upload-grid glass card"
         >
           <div className="upload-header">
@@ -892,10 +947,10 @@ const NexoraDashboard = () => {
             </div>
 
             <div className="filter-system">
-              <div className="filter-popover-container">
+              <div className="filter-popover-container" ref={filterMenuRef}>
                 <button 
                   className={`btn-filter-icon glass ${showFilterMenu ? 'active' : ''}`}
-                  onClick={() => setShowFilterMenu(!showFilterMenu)}
+                  onClick={toggleFilterMenu}
                 >
                   <Filter size={20} />
                 </button>
@@ -903,82 +958,63 @@ const NexoraDashboard = () => {
                 <AnimatePresence>
                   {showFilterMenu && (
                     <motion.div 
-                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                      animate={{ 
-                        opacity: (showDomainMenu && typeof window !== 'undefined' && window.innerWidth <= 768) ? 0 : 1, 
-                        y: 0, 
-                        scale: 1,
-                        pointerEvents: (showDomainMenu && typeof window !== 'undefined' && window.innerWidth <= 768) ? 'none' : 'auto'
-                      }}
-                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                      className="filter-menu glass"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className={`filter-menu glass ${showDomainMenu ? 'domain-open' : ''}`}
                     >
                       <div className="menu-section">
                         <span className="menu-label">Sort By</span>
-                        <button className={sortBy === 'newest' ? 'active' : ''} onClick={() => { setSortBy('newest'); setShowFilterMenu(false); }}>
+                        <button className={sortBy === 'newest' ? 'active' : ''} onClick={() => { setSortBy('newest'); closeFilterMenu(); }}>
                           <Clock size={14} /> Newest First
                         </button>
 
-                        <div 
-                          className="has-submenu"
-                          style={{ position: 'relative', width: '100%' }}
-                          onMouseEnter={() => setShowDomainMenu(true)}
-                          onMouseLeave={() => setShowDomainMenu(false)}
-                        >
+                        <div className="has-submenu" style={{ position: 'relative', width: '100%' }}>
                           <button 
                             className="submenu-trigger" 
                             onClick={(e) => {
-                              if (typeof window !== 'undefined' && window.innerWidth <= 768) {
-                                e.stopPropagation();
-                                setShowDomainMenu(!showDomainMenu);
-                              }
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setShowDomainMenu(!showDomainMenu);
                             }}
                           >
                             <span>Filter Domain</span>
-                            <ArrowRight size={14} />
+                            <ArrowRight size={14} style={{ transform: showDomainMenu ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }} />
                           </button>
                         </div>
 
-                        <button className={sortBy === 'az' ? 'active' : ''} onClick={() => { setSortBy('az'); setShowFilterMenu(false); }}>
+                        <button className={sortBy === 'az' ? 'active' : ''} onClick={() => { setSortBy('az'); closeFilterMenu(); }}>
                           <ArrowUpDown size={14} /> Team A-Z
                         </button>
-                        <button className={sortBy === 'za' ? 'active' : ''} onClick={() => { setSortBy('za'); setShowFilterMenu(false); }}>
+                        <button className={sortBy === 'za' ? 'active' : ''} onClick={() => { setSortBy('za'); closeFilterMenu(); }}>
                           <ArrowUpDown size={14} /> Team Z-A
                         </button>
-                        <button className={sortBy === 'members-desc' ? 'active' : ''} onClick={() => { setSortBy('members-desc'); setShowFilterMenu(false); }}>
+                        <button className={sortBy === 'members-desc' ? 'active' : ''} onClick={() => { setSortBy('members-desc'); closeFilterMenu(); }}>
                           <Users size={14} /> Members (High to Low)
                         </button>
-                        <button className={sortBy === 'members-asc' ? 'active' : ''} onClick={() => { setSortBy('members-asc'); setShowFilterMenu(false); }}>
+                        <button className={sortBy === 'members-asc' ? 'active' : ''} onClick={() => { setSortBy('members-asc'); closeFilterMenu(); }}>
                           <Users size={14} /> Members (Low to High)
                         </button>
                       </div>
-
                     </motion.div>
                   )}
                 </AnimatePresence>
 
+                {/* Domain submenu rendered OUTSIDE filter-menu as a separate card */}
                 <AnimatePresence>
-                  {showDomainMenu && (
+                  {showFilterMenu && showDomainMenu && (
                     <motion.div 
-                      initial={{ opacity: 0, x: 10 }}
+                      initial={{ opacity: 0, x: 20 }}
                       animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: 10 }}
-                      onMouseEnter={() => setShowDomainMenu(true)}
-                      onMouseLeave={() => setShowDomainMenu(false)}
-                      className="domain-submenu glass"
-                      style={{ 
-                        position: 'absolute', 
-                        top: '0px', 
-                        left: '244px', 
-                        zIndex: 1000,
-                        width: '220px'
-                      }}
+                      exit={{ opacity: 0, x: 20 }}
+                      className="domain-submenu-popout"
                     >
-                      <button className={domainFilter === 'all' ? 'active' : ''} onClick={() => { setDomainFilter('all'); setShowFilterMenu(false); setShowDomainMenu(false); }}>
+                      <span className="menu-label" style={{ padding: '4px 8px', display: 'block', marginBottom: '4px' }}>Domains</span>
+                      <button className={domainFilter === 'all' ? 'active' : ''} onClick={() => { setDomainFilter('all'); closeFilterMenu(); }}>
                         All Domains
                       </button>
                       {uniqueDomains.map(d => (
-                        <button key={d} className={domainFilter === d ? 'active' : ''} onClick={() => { setDomainFilter(d); setShowFilterMenu(false); setShowDomainMenu(false); }}>
+                        <button key={d} className={domainFilter === d ? 'active' : ''} onClick={() => { setDomainFilter(d); closeFilterMenu(); }}>
                           {d}
                         </button>
                       ))}
@@ -1008,12 +1044,12 @@ const NexoraDashboard = () => {
                 <motion.div
                   key={team.teamName + idx}
                   layout
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.9 }}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 20 }}
                   transition={{ duration: 0.2 }}
                   className="team-data-card glass card"
-                  onClick={() => setSelectedTeam(team)}
+                  onClick={() => openTeamModal(team)}
                 >
                   <div className="card-header">
                     <div className="team-meta">
@@ -1061,7 +1097,7 @@ const NexoraDashboard = () => {
                       {attendance[team.teamName]?.length > 0 ? <CheckCircle size={14} /> : <Users size={14} />}
                       {attendance[team.teamName]?.length === team.members.split(',').length ? 'All Present' : 'Mark Present'}
                     </button>
-                    <span className="view-details" onClick={() => setSelectedTeam(team)}>Insights <ArrowRight size={14} /></span>
+                    <span className="view-details" onClick={() => openTeamModal(team)}>Insights <ArrowRight size={14} /></span>
                   </div>
                 </motion.div>
               ))}
@@ -1088,7 +1124,7 @@ const NexoraDashboard = () => {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="modal-overlay"
-            onClick={() => setSelectedTeam(null)}
+            onClick={closeTeamModal}
           >
             <motion.div
               initial={{ scale: 0.9, y: 20 }}
@@ -1102,7 +1138,7 @@ const NexoraDashboard = () => {
                   <h2>{selectedTeam.teamName}</h2>
                   <span className={`badge ${String(selectedTeam.status || 'applied').toLowerCase()}`}>{selectedTeam.status || 'Applied'}</span>
                 </div>
-                <button className="close-btn" onClick={() => setSelectedTeam(null)}><X /></button>
+                <button className="close-btn" onClick={closeTeamModal}><X /></button>
               </div>
 
               <div className="modal-body">
@@ -1474,6 +1510,38 @@ const NexoraDashboard = () => {
           gap: 8px;
           transition: all 0.2s;
           width: 100%;
+        }
+        .domain-submenu-popout {
+          position: absolute;
+          top: 0;
+          left: calc(100% + 8px);
+          width: 220px;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          padding: 8px;
+          border-radius: 12px;
+          background: rgba(15, 12, 41, 0.95);
+          backdrop-filter: blur(20px);
+          border: 1px solid var(--glass-border);
+          box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+          z-index: 1000;
+        }
+        .domain-submenu-popout button {
+          text-align: left;
+          padding: 8px 12px;
+          background: transparent;
+          border: none;
+          color: var(--text-muted);
+          border-radius: 6px;
+          cursor: pointer;
+          transition: all 0.2s;
+          font-size: 0.85rem;
+          font-weight: 600;
+        }
+        .domain-submenu-popout button:hover, .domain-submenu-popout button.active {
+          background: rgba(139, 92, 246, 0.15);
+          color: var(--text-main);
         }
         .menu-section button:hover, .submenu-trigger:hover {
           background: rgba(255,255,255,0.05);
@@ -1997,8 +2065,8 @@ const NexoraDashboard = () => {
           .team-data-card { width: 100%; min-width: 0; }
           .actions-bar { flex-direction: column; align-items: stretch; gap: 1rem; }
           .search-box { min-width: 0; }
-          .filter-tabs { overflow-x: auto; white-space: nowrap; padding-bottom: 4px; }
-          .filter-tabs button { flex-shrink: 0; }
+          .filter-tabs { flex-wrap: nowrap; overflow-x: hidden; white-space: nowrap; padding: 4px; gap: 4px; width: 100%; justify-content: space-between; }
+          .filter-tabs button { flex: 1 1 auto; padding: 4px 2px; font-size: 0.65rem; flex-shrink: 1; min-width: 0; }
           
           .modal-overlay { padding: 1rem; }
           .modal-content { padding: 1.5rem; border-radius: 16px; }
@@ -2019,9 +2087,48 @@ const NexoraDashboard = () => {
             border: 1px solid rgba(255, 255, 255, 0.2) !important;
             box-shadow: 0 0 100px rgba(0,0,0,0.9) !important;
             padding: 1.5rem !important;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
           }
-          
-          /* Add a backdrop effect when menu is open on mobile */
+          /* When domain opens, slide filter menu to the left */
+          .filter-menu.domain-open {
+            left: 3% !important;
+            transform: translate(0, -50%) !important;
+            width: 44% !important;
+            max-width: none !important;
+            padding: 0.8rem !important;
+            border-radius: 14px !important;
+          }
+          .filter-menu.domain-open .menu-section button,
+          .filter-menu.domain-open .submenu-trigger {
+            font-size: 0.7rem !important;
+            padding: 5px 6px !important;
+            gap: 4px !important;
+          }
+          .filter-menu.domain-open .menu-label {
+            font-size: 0.6rem !important;
+          }
+          /* Domain submenu on the right — separate panel with gap */
+          .domain-submenu-popout {
+            position: fixed !important;
+            top: 50% !important;
+            left: auto !important;
+            right: 3% !important;
+            transform: translateY(-50%) !important;
+            width: 44% !important;
+            max-height: 60vh !important;
+            overflow-y: auto !important;
+            z-index: 10000 !important;
+            background: rgba(15, 12, 41, 0.98) !important;
+            border: 1px solid rgba(139, 92, 246, 0.4) !important;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.8) !important;
+            border-radius: 14px !important;
+            padding: 10px !important;
+          }
+          .domain-submenu-popout button {
+            font-size: 0.75rem !important;
+            padding: 7px 8px !important;
+          }
+          /* Backdrop overlay */
           .filter-popover-container::before {
             content: "";
             position: fixed;
@@ -2035,18 +2142,6 @@ const NexoraDashboard = () => {
           }
           .filter-popover-container:has(.filter-menu)::before {
             opacity: 1;
-          }
-          
-          .domain-submenu { 
-            position: fixed !important; 
-            top: 50% !important; 
-            left: 50% !important; 
-            right: auto !important;
-            transform: translate(-50%, -50%) !important; 
-            width: 85% !important; 
-            max-width: 300px !important;
-            z-index: 10000 !important;
-            box-shadow: 0 0 50px rgba(0,0,0,0.9) !important;
           }
           
           .sync-row { grid-template-columns: 1fr; }
