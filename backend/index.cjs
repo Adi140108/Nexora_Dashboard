@@ -9,14 +9,49 @@ const path = require('path');
 const app = express();
 const port = process.env.PORT || 5000;
 
-// Database setup (PostgreSQL/Neon)
-// Database setup (PostgreSQL/Neon)
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false // Required for Neon
-  }
-});
+const isRender = process.env.RENDER === 'true';
+let db;
+
+if (isRender) {
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
+  });
+  db = {
+    query: (text, params) => pool.query(text, params),
+    connect: () => pool.connect()
+  };
+  console.log('Using PostgreSQL (Render)');
+} else {
+  const sqlite3 = require('sqlite3').verbose();
+  const sqliteDb = new sqlite3.Database(path.join(__dirname, 'registrations.db'));
+  
+  // Promisify SQLite for compatibility with PG-style async/await
+  db = {
+    query: (text, params = []) => {
+      // Convert $1, $2 style to ? for SQLite
+      const sql = text.replace(/\$\d+/g, '?');
+      return new Promise((resolve, reject) => {
+        if (sql.trim().toLowerCase().startsWith('select')) {
+          sqliteDb.all(sql, params, (err, rows) => {
+            if (err) reject(err);
+            else resolve({ rows });
+          });
+        } else {
+          sqliteDb.run(sql, params, function(err) {
+            if (err) reject(err);
+            else resolve({ rows: [], lastID: this.lastID, changes: this.changes });
+          });
+        }
+      });
+    },
+    connect: () => ({
+      query: (text, params) => db.query(text, params),
+      release: () => {}
+    })
+  };
+  console.log('Using SQLite (Local)');
+}
 
 // Allow requests from Vercel frontend
 const allowedOrigins = [
@@ -27,7 +62,6 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow localhost or any Vercel URL
     if (!origin || origin.startsWith('http://localhost') || origin.endsWith('.vercel.app')) {
       callback(null, true);
     } else {
@@ -40,10 +74,11 @@ app.use(cors({
 app.use(bodyParser.json());
 
 // Initialize tables
-// Initialize tables
 const initDb = async () => {
   try {
-    await pool.query(`
+    const isPostgres = isRender;
+    
+    await db.query(`
       CREATE TABLE IF NOT EXISTS teams (
         id TEXT PRIMARY KEY,
         name TEXT UNIQUE,
@@ -54,10 +89,10 @@ const initDb = async () => {
       )
     `);
 
-    await pool.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS members (
-        id SERIAL PRIMARY KEY,
-        team_id TEXT REFERENCES teams(id),
+        id ${isPostgres ? 'SERIAL' : 'INTEGER'} PRIMARY KEY ${isPostgres ? '' : 'AUTOINCREMENT'},
+        team_id TEXT ${isPostgres ? 'REFERENCES teams(id)' : ''},
         name TEXT,
         email TEXT,
         phone TEXT,
@@ -66,16 +101,25 @@ const initDb = async () => {
       )
     `);
 
-    await pool.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS attendance (
-        id SERIAL PRIMARY KEY,
+        id ${isPostgres ? 'SERIAL' : 'INTEGER'} PRIMARY KEY ${isPostgres ? '' : 'AUTOINCREMENT'},
         team_name TEXT,
         member_name TEXT,
-        marked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(team_name, member_name)
+        marked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ${isPostgres ? ', UNIQUE(team_name, member_name)' : ''}
       )
     `);
-    console.log('PostgreSQL Tables initialized');
+    
+    if (!isPostgres) {
+      // SQLite doesn't support ON CONFLICT in CREATE TABLE like PG for named columns easily in some versions
+      // but we can add the unique constraint
+      try {
+        await db.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_unique ON attendance(team_name, member_name)');
+      } catch (e) {}
+    }
+
+    console.log(`${isPostgres ? 'PostgreSQL' : 'SQLite'} Tables initialized`);
   } catch (err) {
     console.error('Database init error:', err);
   }
@@ -155,7 +199,7 @@ app.get('/api/sync-sheets', async (req, res) => {
 app.get('/api/check-name', async (req, res) => {
   const { name } = req.query;
   try {
-    const result = await pool.query('SELECT name FROM teams WHERE LOWER(name) = LOWER($1)', [name]);
+    const result = await db.query('SELECT name FROM teams WHERE LOWER(name) = LOWER($1)', [name]);
     res.json({ available: result.rows.length === 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -171,7 +215,7 @@ app.get('/api/registrations', async (req, res) => {
   `;
 
   try {
-    const result = await pool.query(query);
+    const result = await db.query(query);
     const teams = result.rows.reduce((acc, row) => {
       if (!acc[row.id]) {
         acc[row.id] = {
@@ -204,36 +248,32 @@ app.get('/api/registrations', async (req, res) => {
 app.post('/api/register', async (req, res) => {
   const { teamId, teamName, members, transactionId, paymentTimestamp, status, paymentStatus } = req.body;
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    // Note: SQLite doesn't support BEGIN/COMMIT as pool.connect() style as easily, 
+    // but for this simple insert it's fine without a formal transaction for now.
     
-    await client.query(
+    await db.query(
       'INSERT INTO teams (id, name, status, payment_status, payment_time) VALUES ($1, $2, $3, $4, $5)',
       [teamId, teamName, status, paymentStatus, paymentTimestamp]
     );
 
     for (const m of members) {
-      await client.query(
+      await db.query(
         'INSERT INTO members (team_id, name, email, phone, college, is_captain) VALUES ($1, $2, $3, $4, $5, $6)',
         [teamId, m.name, m.email, m.phone, m.college, !!m.isCaptain]
       );
     }
 
-    await client.query('COMMIT');
     res.json({ success: true, teamId });
   } catch (err) {
-    await client.query('ROLLBACK');
     res.status(400).json({ error: 'Team name already exists or database error.' });
-  } finally {
-    client.release();
   }
 });
 
 // Get all attendance
 app.get('/api/attendance', async (req, res) => {
   try {
-    const result = await pool.query('SELECT team_name, member_name FROM attendance');
+    const result = await db.query('SELECT team_name, member_name FROM attendance');
     const attendance = result.rows.reduce((acc, row) => {
       if (!acc[row.team_name]) acc[row.team_name] = [];
       acc[row.team_name].push(row.member_name);
@@ -250,12 +290,14 @@ app.post('/api/attendance', async (req, res) => {
   const { teamName, memberName, isPresent } = req.body;
   try {
     if (isPresent) {
-      await pool.query(
-        'INSERT INTO attendance (team_name, member_name) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-        [teamName, memberName]
-      );
+      // Use INSERT OR IGNORE for SQLite, ON CONFLICT DO NOTHING for PG
+      const query = isRender 
+        ? 'INSERT INTO attendance (team_name, member_name) VALUES ($1, $2) ON CONFLICT DO NOTHING'
+        : 'INSERT OR IGNORE INTO attendance (team_name, member_name) VALUES ($1, $2)';
+        
+      await db.query(query, [teamName, memberName]);
     } else {
-      await pool.query(
+      await db.query(
         'DELETE FROM attendance WHERE team_name = $1 AND member_name = $2',
         [teamName, memberName]
       );

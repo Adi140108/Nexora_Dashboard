@@ -18,7 +18,9 @@ import {
   Cloud,
   AlertCircle,
   RefreshCw,
-  Trash2
+  Trash2,
+  ArrowUpDown,
+  Printer
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -35,6 +37,10 @@ const NexoraDashboard = () => {
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
+  const [sortBy, setSortBy] = useState('newest'); // 'newest', 'az', 'za'
+  const [domainFilter, setDomainFilter] = useState('all');
+  const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const [showDomainMenu, setShowDomainMenu] = useState(false);
 
   // Cloud Sync States
   const [sheetIdTeam, setSheetIdTeam] = useState(import.meta.env.VITE_TEAM_SHEET_ID || localStorage.getItem('nexora_sheet_team') || '');
@@ -52,6 +58,219 @@ const NexoraDashboard = () => {
     if (url.endsWith('/')) url = url.slice(0, -1);
     return url;
   }, []);
+
+  const handlePrintAttendance = () => {
+    const printWindow = window.open('', '_blank');
+    const presentTeams = mergedData.filter(team => (attendance[team.teamName] || []).length > 0);
+
+    const tableHtml = `
+      <html>
+        <head>
+          <title>Vibe-A-Thon 2026 - Attendance Report</title>
+          <base href="${window.location.origin}/">
+          <style>
+            body { 
+              font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+              padding: 20px; 
+              color: #000;
+              line-height: 1.5;
+            }
+            .print-header {
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              margin-bottom: 20px;
+            }
+            .club-logo { height: 80px; width: auto; object-fit: contain; }
+            .banner-img { width: 100%; height: auto; display: block; border-radius: 8px; margin-bottom: 20px; }
+            
+            .report-title {
+              border-bottom: 3px solid #8b5cf6;
+              padding-bottom: 10px;
+              margin-bottom: 20px;
+            }
+            .report-title h1 { margin: 0; color: #0f0c29; font-size: 2rem; }
+            .report-title p { margin: 5px 0 0; color: #666; font-weight: bold; }
+
+            table { 
+              width: 100%; 
+              border-collapse: collapse; 
+              font-size: 14px; /* Loosened for readability */
+              margin-top: 20px;
+            }
+            th, td { 
+              border: 1px solid #333; 
+              padding: 12px; /* Spacious padding */
+              text-align: left; 
+              color: #000;
+            }
+            th { 
+              background-color: #f8f9fa !important; 
+              font-weight: bold;
+              text-transform: uppercase;
+              -webkit-print-color-adjust: exact;
+            }
+            .team-name-cell { vertical-align: top; font-weight: 800; background: #fafafa; }
+            .tick { color: #10b981; font-weight: bold; font-size: 1.2rem; }
+            .cross { color: #f43f5e; font-weight: bold; font-size: 1.2rem; }
+            .meta { margin-bottom: 10px; font-size: 0.9rem; color: #666; }
+            
+            @media print {
+              .no-print { display: none; }
+              body { padding: 0; }
+              table { page-break-inside: auto; }
+              tr { page-break-inside: avoid; page-break-after: auto; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="print-header">
+            <img src="nexora_logo_v2.png" class="club-logo" alt="Club Logo" />
+            <div style="text-align: right;">
+              <div class="meta">Generated: ${new Date().toLocaleString()}</div>
+              <div class="meta">VIBE-A-THON Official Document</div>
+            </div>
+          </div>
+
+          <img src="vibeathon_banner.png" class="banner-img" alt="Vibeathon Banner" />
+
+          <div class="report-title">
+            <h1>Attendance Report</h1>
+            <p>Teams Present (Full & Partial): ${presentTeams.length} | Total Active Members: ${presentTeams.reduce((acc, t) => acc + (t.detailedMembers?.filter(m => (attendance[t.teamName] || []).includes(m.name)).length || 0), 0)}</p>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 50px; text-align: center;">S.No.</th>
+                <th style="width: 30%;">Team Name</th>
+                <th>Member Name</th>
+                <th style="text-align: center; width: 15%;">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${presentTeams.map((team, teamIdx) => {
+                const members = team.detailedMembers || [{ name: team.teamName }];
+                const teamAttendance = attendance[team.teamName] || [];
+                return members.map((m, idx) => `
+                  <tr>
+                    ${idx === 0 ? `
+                      <td class="team-name-cell" rowspan="${members.length}" style="text-align: center;">${teamIdx + 1}</td>
+                      <td class="team-name-cell" rowspan="${members.length}">${team.teamName}</td>
+                    ` : ''}
+                    <td>${m.name}</td>
+                    <td style="text-align: center;">
+                      ${teamAttendance.includes(m.name) ? '<span class="tick">✔️</span>' : '<span class="cross">❌</span>'}
+                    </td>
+                  </tr>
+                `).join('');
+              }).join('')}
+            </tbody>
+          </table>
+        </body>
+      </html>
+    `;
+    printWindow.document.write(tableHtml);
+    printWindow.document.close();
+    setTimeout(() => printWindow.print(), 500);
+  };
+
+  const handlePrintTeamReport = (team) => {
+    const printWindow = window.open('', '_blank');
+    const teamAttendance = attendance[team.teamName] || [];
+    const members = team.detailedMembers || team.members.split(',').map(m => ({ name: m.trim() }));
+
+    const tableHtml = `
+      <html>
+        <head>
+          <title>Team Report - ${team.teamName}</title>
+          <base href="${window.location.origin}/">
+          <style>
+            body { font-family: 'Inter', sans-serif; padding: 20px; color: #000; line-height: 1.6; }
+            .print-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+            .club-logo { height: 70px; }
+            .banner-img { width: 100%; height: auto; display: block; border-radius: 8px; margin-bottom: 20px; }
+            .report-title { border-bottom: 3px solid #8b5cf6; padding-bottom: 10px; margin-bottom: 20px; }
+            .report-title h1 { margin: 0; color: #0f0c29; }
+            
+            .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
+            .info-section { border: 1px solid #333; padding: 15px; border-radius: 8px; }
+            .info-section h3 { margin-top: 0; border-bottom: 1px solid #eee; padding-bottom: 8px; font-size: 1rem; text-transform: uppercase; }
+            .detail-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.9rem; }
+            .label { font-weight: bold; color: #555; }
+            
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #333; padding: 10px; text-align: left; }
+            th { background-color: #f8f9fa !important; -webkit-print-color-adjust: exact; }
+            .tick { color: #10b981; font-weight: bold; font-size: 1.1rem; }
+            .cross { color: #f43f5e; font-weight: bold; font-size: 1.1rem; }
+            
+            @media print { body { padding: 0; } }
+          </style>
+        </head>
+        <body>
+          <div class="print-header">
+            <img src="nexora_logo_v2.png" class="club-logo" alt="Logo" />
+            <div style="text-align: right; font-size: 0.8rem; color: #666;">
+              Generated: ${new Date().toLocaleString()}<br>
+              VIBE-A-THON Official Team Dossier
+            </div>
+          </div>
+
+          <img src="vibeathon_banner.png" class="banner-img" alt="Banner" />
+
+          <div class="report-title">
+            <h1>Team Report: ${team.teamName}</h1>
+          </div>
+
+          <div class="info-grid">
+            <div class="info-section">
+              <h3>Project Details</h3>
+              <div class="detail-row"><span class="label">Project:</span> <span>${team.project}</span></div>
+              <div class="detail-row"><span class="label">Domain:</span> <span>${team.domain}</span></div>
+              <div class="detail-row"><span class="label">Status:</span> <span>${team.status || 'Active'}</span></div>
+            </div>
+            <div class="info-section">
+              <h3>Financials</h3>
+              <div class="detail-row"><span class="label">Payment:</span> <span>${team.paymentStatus}</span></div>
+              <div class="detail-row"><span class="label">Transaction:</span> <span>${team.transactionId}</span></div>
+              <div class="detail-row"><span class="label">Amount:</span> <span>₹${team.amount}</span></div>
+              <div class="detail-row"><span class="label">Mode:</span> <span>${team.paymentMode || 'N/A'}</span></div>
+            </div>
+          </div>
+
+          <h3>Team Composition & Attendance</h3>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 50px; text-align: center;">S.No.</th>
+                <th>Member Name</th>
+                <th>Role</th>
+                <th style="text-align: center;">Attendance</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${members.map((m, idx) => `
+                <tr>
+                  <td style="text-align: center;">${idx + 1}</td>
+                  <td><strong>${m.name}</strong></td>
+                  <td>${m.name === team.leader ? 'Leader' : 'Member'}</td>
+                  <td style="text-align: center;">
+                    ${teamAttendance.includes(m.name) ? '<span class="tick">✔️</span>' : '<span class="cross">❌</span>'}
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </body>
+      </html>
+    `;
+    printWindow.document.write(tableHtml);
+    printWindow.document.close();
+    setTimeout(() => printWindow.print(), 500);
+  };
+
+  const handleManualSync = async () => { };
 
   // Fetch attendance from backend with Auto-Sync (Polling)
   React.useEffect(() => {
@@ -346,15 +565,6 @@ const NexoraDashboard = () => {
     }
   };
 
-  const handleSearchChange = (val) => {
-    setSearchTerm(val);
-    if (val.length > 2 && !recentSearches.includes(val)) {
-      const newSearches = [val, ...recentSearches.slice(0, 4)];
-      setRecentSearches(newSearches);
-      localStorage.setItem('nexora_recent_searches', JSON.stringify(newSearches));
-    }
-  };
-
   const toggleAttendance = async (teamName, memberName) => {
     const isCurrentlyPresent = attendance[teamName]?.includes(memberName);
     const newIsPresent = !isCurrentlyPresent;
@@ -403,11 +613,29 @@ const NexoraDashboard = () => {
 
   const stats = useMemo(() => {
     if (mergedData.length === 0) return null;
-    const presentCount = mergedData.filter(t => attendance[t.teamName] && attendance[t.teamName].length > 0).length;
+    
+    let fullyPresent = 0;
+    let partiallyPresent = 0;
+    let absent = 0;
+
+    mergedData.forEach(t => {
+      const presentMembers = (attendance[t.teamName] || []).length;
+      const totalMembers = t.detailedMembers?.length || 1;
+
+      if (presentMembers === 0) {
+        absent++;
+      } else if (presentMembers >= totalMembers) {
+        fullyPresent++;
+      } else {
+        partiallyPresent++;
+      }
+    });
+
     return {
       total: mergedData.length,
-      present: presentCount,
-      absent: mergedData.length - presentCount,
+      present: fullyPresent,
+      partial: partiallyPresent,
+      absent: absent,
       paid: mergedData.filter(t => t.paymentStatus?.toLowerCase() === 'paid' || t.paymentStatus?.toLowerCase() === 'success').length,
     };
   }, [mergedData, attendance]);
@@ -421,12 +649,50 @@ const NexoraDashboard = () => {
     });
 
     if (activeTab === 'paid') data = data.filter(t => String(t.paymentStatus || '').toLowerCase() === 'paid' || String(t.paymentStatus || '').toLowerCase() === 'success');
-    if (activeTab === 'pending') data = data.filter(t => String(t.paymentStatus || '').toLowerCase() === 'pending');
-    if (activeTab === 'present') data = data.filter(t => attendance[t.teamName] && attendance[t.teamName].length > 0);
+    
+    if (activeTab === 'partial') {
+      data = data.filter(t => {
+        const count = (attendance[t.teamName] || []).length;
+        return count > 0 && count < (t.detailedMembers?.length || 1);
+      });
+    }
+    
+    if (activeTab === 'present') {
+      data = data.filter(t => {
+        const count = (attendance[t.teamName] || []).length;
+        return count >= (t.detailedMembers?.length || 1);
+      });
+    }
+    
     if (activeTab === 'absent') data = data.filter(t => !attendance[t.teamName] || attendance[t.teamName].length === 0);
 
-    return data;
-  }, [mergedData, searchTerm, activeTab, attendance]);
+    // Filter by Domain
+    if (domainFilter !== 'all') {
+      data = data.filter(t => t.domain === domainFilter);
+    }
+
+    // Sort Data
+    const sorted = [...data];
+    if (sortBy === 'az') {
+      sorted.sort((a, b) => a.teamName.localeCompare(b.teamName));
+    } else if (sortBy === 'za') {
+      sorted.sort((a, b) => b.teamName.localeCompare(a.teamName));
+    } else if (sortBy === 'members-desc') {
+      sorted.sort((a, b) => (b.detailedMembers?.length || 0) - (a.detailedMembers?.length || 0));
+    } else if (sortBy === 'members-asc') {
+      sorted.sort((a, b) => (a.detailedMembers?.length || 0) - (b.detailedMembers?.length || 0));
+    } else {
+      // Default: newest first (using createdAt or index)
+      sorted.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    }
+
+    return sorted;
+  }, [mergedData, searchTerm, activeTab, attendance, domainFilter, sortBy]);
+
+  const uniqueDomains = useMemo(() => {
+    const domains = [...new Set(mergedData.map(t => t.domain))].filter(Boolean);
+    return domains.sort();
+  }, [mergedData]);
 
   const handleRefresh = () => {
     if (sheetIdTeam || import.meta.env.VITE_TEAM_SHEET_ID) {
@@ -436,13 +702,6 @@ const NexoraDashboard = () => {
     }
   };
 
-  const exportMerged = () => {
-    const ws = XLSX.utils.json_to_sheet(mergedData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Merged_Data");
-    XLSX.writeFile(wb, "Nexora_Merged_Report.xlsx");
-  };
-
   return (
     <div className="dashboard-container">
       <header className="dashboard-header">
@@ -450,7 +709,13 @@ const NexoraDashboard = () => {
           <motion.h1
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
           >
+            <img 
+              src="/nexora_brand_logo.png" 
+              alt="Nexora" 
+              style={{ height: '2.5em', width: 'auto', objectFit: 'contain' }} 
+            />
             NEXORA DASHBOARD
           </motion.h1>
         </div>
@@ -582,7 +847,7 @@ const NexoraDashboard = () => {
               </div>
               <div className="stat-trend"><TrendingUp size={12} /> Live</div>
             </div>
-            <div className="stat-card glass present">
+            <div className="stat-card glass present" style={{position: 'relative'}}>
               <div className="stat-info">
                 <CheckCircle className="stat-icon" />
                 <div>
@@ -590,6 +855,9 @@ const NexoraDashboard = () => {
                   <span className="value">{stats.present}</span>
                 </div>
               </div>
+              <button className="print-stats-btn" onClick={handlePrintAttendance}>
+                <Printer size={18} />
+              </button>
             </div>
             <div className="stat-card glass absent">
               <div className="stat-info">
@@ -600,12 +868,12 @@ const NexoraDashboard = () => {
                 </div>
               </div>
             </div>
-            <div className="stat-card glass paid">
+            <div className="stat-card glass partial">
               <div className="stat-info">
-                <CreditCard className="stat-icon" />
+                <Users className="stat-icon" />
                 <div>
-                  <span className="label">Total Paid</span>
-                  <span className="value">{stats.paid}</span>
+                  <span className="label">Partially Present</span>
+                  <span className="value">{stats.partial}</span>
                 </div>
               </div>
             </div>
@@ -617,24 +885,120 @@ const NexoraDashboard = () => {
               <Search className="search-icon" size={18} />
               <input
                 type="text"
-                placeholder="Search by Team Name or Member..."
+                placeholder="Search teams..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
-            <div className="filter-tabs glass">
-              <button className={activeTab === 'all' ? 'active' : ''} onClick={() => setActiveTab('all')}>All</button>
 
-              <button className={activeTab === 'paid' ? 'active' : ''} onClick={() => setActiveTab('paid')}>Paid</button>
-              <button className={activeTab === 'pending' ? 'active' : ''} onClick={() => setActiveTab('pending')}>Pending</button>
-              <button className={activeTab === 'present' ? 'active' : ''} onClick={() => setActiveTab('present')}>
-                <CheckCircle size={14} style={{ marginRight: '4px' }} /> Present
-              </button>
-              <button className={activeTab === 'absent' ? 'active' : ''} onClick={() => setActiveTab('absent')}>
-                <AlertCircle size={14} style={{ marginRight: '4px' }} /> Absent
-              </button>
+            <div className="filter-system">
+              <div className="filter-popover-container">
+                <button 
+                  className={`btn-filter-icon glass ${showFilterMenu ? 'active' : ''}`}
+                  onClick={() => setShowFilterMenu(!showFilterMenu)}
+                >
+                  <Filter size={20} />
+                </button>
+
+                <AnimatePresence>
+                  {showFilterMenu && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                      animate={{ 
+                        opacity: (showDomainMenu && typeof window !== 'undefined' && window.innerWidth <= 768) ? 0 : 1, 
+                        y: 0, 
+                        scale: 1,
+                        pointerEvents: (showDomainMenu && typeof window !== 'undefined' && window.innerWidth <= 768) ? 'none' : 'auto'
+                      }}
+                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                      className="filter-menu glass"
+                    >
+                      <div className="menu-section">
+                        <span className="menu-label">Sort By</span>
+                        <button className={sortBy === 'newest' ? 'active' : ''} onClick={() => { setSortBy('newest'); setShowFilterMenu(false); }}>
+                          <Clock size={14} /> Newest First
+                        </button>
+
+                        <div 
+                          className="has-submenu"
+                          style={{ position: 'relative', width: '100%' }}
+                          onMouseEnter={() => setShowDomainMenu(true)}
+                          onMouseLeave={() => setShowDomainMenu(false)}
+                        >
+                          <button 
+                            className="submenu-trigger" 
+                            onClick={(e) => {
+                              if (typeof window !== 'undefined' && window.innerWidth <= 768) {
+                                e.stopPropagation();
+                                setShowDomainMenu(!showDomainMenu);
+                              }
+                            }}
+                          >
+                            <span>Filter Domain</span>
+                            <ArrowRight size={14} />
+                          </button>
+                        </div>
+
+                        <button className={sortBy === 'az' ? 'active' : ''} onClick={() => { setSortBy('az'); setShowFilterMenu(false); }}>
+                          <ArrowUpDown size={14} /> Team A-Z
+                        </button>
+                        <button className={sortBy === 'za' ? 'active' : ''} onClick={() => { setSortBy('za'); setShowFilterMenu(false); }}>
+                          <ArrowUpDown size={14} /> Team Z-A
+                        </button>
+                        <button className={sortBy === 'members-desc' ? 'active' : ''} onClick={() => { setSortBy('members-desc'); setShowFilterMenu(false); }}>
+                          <Users size={14} /> Members (High to Low)
+                        </button>
+                        <button className={sortBy === 'members-asc' ? 'active' : ''} onClick={() => { setSortBy('members-asc'); setShowFilterMenu(false); }}>
+                          <Users size={14} /> Members (Low to High)
+                        </button>
+                      </div>
+
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <AnimatePresence>
+                  {showDomainMenu && (
+                    <motion.div 
+                      initial={{ opacity: 0, x: 10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: 10 }}
+                      onMouseEnter={() => setShowDomainMenu(true)}
+                      onMouseLeave={() => setShowDomainMenu(false)}
+                      className="domain-submenu glass"
+                      style={{ 
+                        position: 'absolute', 
+                        top: '0px', 
+                        left: '244px', 
+                        zIndex: 1000,
+                        width: '220px'
+                      }}
+                    >
+                      <button className={domainFilter === 'all' ? 'active' : ''} onClick={() => { setDomainFilter('all'); setShowFilterMenu(false); setShowDomainMenu(false); }}>
+                        All Domains
+                      </button>
+                      {uniqueDomains.map(d => (
+                        <button key={d} className={domainFilter === d ? 'active' : ''} onClick={() => { setDomainFilter(d); setShowFilterMenu(false); setShowDomainMenu(false); }}>
+                          {d}
+                        </button>
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              <div className="filter-tabs glass">
+                <button className={activeTab === 'all' ? 'active' : ''} onClick={() => setActiveTab('all')}>All</button>
+                <button className={activeTab === 'paid' ? 'active' : ''} onClick={() => setActiveTab('paid')}>Paid</button>
+                <button className={activeTab === 'partial' ? 'active' : ''} onClick={() => setActiveTab('partial')}>Partially Present</button>
+                <button className={activeTab === 'present' ? 'active' : ''} onClick={() => setActiveTab('present')}>
+                  <CheckCircle size={14} /> Present
+                </button>
+                <button className={activeTab === 'absent' ? 'active' : ''} onClick={() => setActiveTab('absent')}>
+                  <AlertCircle size={14} /> Absent
+                </button>
+              </div>
             </div>
-
           </div>
 
           {/* Results Grid */}
@@ -683,8 +1047,8 @@ const NexoraDashboard = () => {
                         <span className="utr-tag">{team.transactionId}</span>
                       )}
                       {attendance[team.teamName]?.length > 0 && (
-                        <span className="attendance-badge">
-                          {attendance[team.teamName].length}/{team.members.split(',').length} Present
+                        <span className={`attendance-badge ${attendance[team.teamName].length === (team.detailedMembers?.length || 1) ? 'all' : 'partial'}`}>
+                          {attendance[team.teamName].length}/{team.detailedMembers?.length || 1} Present
                         </span>
                       )}
                     </div>
@@ -856,7 +1220,7 @@ const NexoraDashboard = () => {
               </div>
 
               <div className="modal-footer">
-                <button className="btn-primary" onClick={() => window.print()}>Print Report</button>
+                <button className="btn-primary" onClick={() => handlePrintTeamReport(selectedTeam)}>Print Report</button>
               </div>
             </motion.div>
           </motion.div>
@@ -1000,7 +1364,22 @@ const NexoraDashboard = () => {
         }
         .stat-card.present .stat-icon { color: #10b981; background: rgba(16, 185, 129, 0.1); }
         .stat-card.absent .stat-icon { color: #f43f5e; background: rgba(244, 63, 94, 0.1); }
+        .stat-card.partial .stat-icon { color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
         .stat-card.paid .stat-icon { color: #06b6d4; background: rgba(6, 182, 212, 0.1); }
+        .print-stats-btn {
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          color: white;
+          width: 32px;
+          height: 32px;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        .print-stats-btn:hover { background: rgba(16, 185, 129, 0.2); border-color: #10b981; }
         .label {
           display: block;
           color: var(--text-muted);
@@ -1028,6 +1407,128 @@ const NexoraDashboard = () => {
           margin-bottom: 2rem;
           align-items: center;
           flex-wrap: wrap;
+        }
+        .filter-system {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+        }
+        .filter-popover-container {
+          position: relative;
+        }
+        .btn-filter-icon {
+          width: 44px;
+          height: 44px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 12px;
+          border: 1px solid var(--glass-border);
+          color: var(--text-muted);
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        .btn-filter-icon:hover, .btn-filter-icon.active {
+          border-color: var(--primary);
+          color: var(--primary);
+          background: rgba(139, 92, 246, 0.1);
+        }
+        .filter-menu {
+          position: absolute;
+          top: calc(100% + 12px);
+          right: 0;
+          width: 240px;
+          background: rgba(15, 12, 41, 0.95);
+          backdrop-filter: blur(20px);
+          border: 1px solid var(--glass-border);
+          border-radius: 16px;
+          padding: 1rem;
+          z-index: 100;
+          box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        .menu-section {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+        .menu-label {
+          font-size: 0.7rem;
+          text-transform: uppercase;
+          color: var(--text-muted);
+          font-weight: 800;
+          margin-bottom: 4px;
+          padding: 0 8px;
+        }
+        .menu-section button, .submenu-trigger {
+          background: transparent;
+          border: none;
+          color: white;
+          padding: 8px 12px;
+          border-radius: 8px;
+          text-align: left;
+          font-size: 0.85rem;
+          font-weight: 600;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          transition: all 0.2s;
+          width: 100%;
+        }
+        .menu-section button:hover, .submenu-trigger:hover {
+          background: rgba(255,255,255,0.05);
+          color: var(--primary);
+        }
+        .menu-section button.active {
+          background: rgba(139, 92, 246, 0.2);
+          color: var(--primary);
+        }
+        .menu-divider {
+          height: 1px;
+          background: var(--glass-border);
+          margin: 0.8rem 0;
+        }
+        .has-submenu {
+          position: relative;
+          display: block;
+          width: 100%;
+        }
+        .submenu-trigger {
+          justify-content: space-between;
+        }
+        .domain-submenu {
+          position: absolute;
+          left: calc(100% + 12px);
+          width: 220px;
+          background: rgba(15, 12, 41, 0.98);
+          backdrop-filter: blur(20px);
+          border: 1px solid var(--glass-border);
+          border-radius: 16px;
+          padding: 0.8rem;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          box-shadow: 10px 0 30px rgba(0,0,0,0.5);
+        }
+        .domain-submenu button {
+          background: transparent;
+          border: none;
+          color: white;
+          padding: 8px 12px;
+          border-radius: 8px;
+          text-align: left;
+          font-size: 0.85rem;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        .domain-submenu button:hover {
+          background: rgba(255,255,255,0.05);
+          color: var(--primary);
+        }
+        .domain-submenu button.active {
+          background: rgba(139, 92, 246, 0.2);
+          color: var(--primary);
         }
         .search-box {
           flex: 1;
@@ -1062,7 +1563,7 @@ const NexoraDashboard = () => {
         }
         .results-grid {
           display: grid;
-          grid-template-columns: repeat(3, 350px);
+          grid-template-columns: repeat(3, minmax(0, 1fr));
           gap: 1.5rem;
           margin-bottom: 3rem;
         }
@@ -1257,12 +1758,14 @@ const NexoraDashboard = () => {
         
         .modal-grid {
           display: grid;
-          grid-template-columns: 1fr 1fr;
+          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
           gap: 1.5rem;
         }
         .full-width { grid-column: 1 / -1; }
         .low-case { text-transform: lowercase; }
-        .attendance-badge { margin-left: auto; font-size: 0.75rem; background: rgba(6, 182, 212, 0.1); color: var(--secondary); padding: 2px 8px; border-radius: 10px; }
+        .attendance-badge { margin-left: auto; font-size: 0.75rem; background: rgba(6, 182, 212, 0.1); color: var(--secondary); padding: 2px 8px; border-radius: 10px; border: 1px solid transparent; }
+        .attendance-badge.all { background: rgba(6, 182, 212, 0.15); color: #06b6d4; border: 1px solid rgba(6, 182, 212, 0.3); }
+        .attendance-badge.partial { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); }
         .project-name { font-weight: 600; font-size: 0.95rem; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .location-meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px 0; }
         .college-tag, .city-tag { font-size: 0.65rem; color: var(--text-muted); background: rgba(255, 255, 255, 0.05); padding: 2px 6px; border-radius: 4px; display: flex; align-items: center; gap: 4px; border: 1px solid rgba(255, 255, 255, 0.05); }
@@ -1477,6 +1980,88 @@ const NexoraDashboard = () => {
           50% { opacity: 0.5; }
           100% { opacity: 1; }
         }
+
+        /* Mobile Responsiveness Queries */
+        @media (max-width: 1024px) {
+          .dashboard-container { padding: 1.5rem; }
+          .header-titles h1 { font-size: 2rem; }
+        }
+
+        @media (max-width: 768px) {
+          .dashboard-header { flex-direction: column; align-items: flex-start; gap: 1rem; }
+          .stats-grid { grid-template-columns: 1fr; }
+          .results-grid { 
+            grid-template-columns: 1fr !important; 
+            width: 100%;
+          }
+          .team-data-card { width: 100%; min-width: 0; }
+          .actions-bar { flex-direction: column; align-items: stretch; gap: 1rem; }
+          .search-box { min-width: 0; }
+          .filter-tabs { overflow-x: auto; white-space: nowrap; padding-bottom: 4px; }
+          .filter-tabs button { flex-shrink: 0; }
+          
+          .modal-overlay { padding: 1rem; }
+          .modal-content { padding: 1.5rem; border-radius: 16px; }
+          .header-info h2 { font-size: 1.5rem; }
+          
+          .filter-menu { 
+            position: fixed !important;
+            top: 50% !important;
+            left: 50% !important;
+            right: auto !important;
+            transform: translate(-50%, -50%) !important;
+            width: 90% !important;
+            max-width: 340px !important;
+            max-height: 80vh !important;
+            overflow-y: auto !important;
+            z-index: 9999 !important;
+            background: rgba(15, 12, 41, 0.98) !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            box-shadow: 0 0 100px rgba(0,0,0,0.9) !important;
+            padding: 1.5rem !important;
+          }
+          
+          /* Add a backdrop effect when menu is open on mobile */
+          .filter-popover-container::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(4px);
+            z-index: 9998;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s;
+          }
+          .filter-popover-container:has(.filter-menu)::before {
+            opacity: 1;
+          }
+          
+          .domain-submenu { 
+            position: fixed !important; 
+            top: 50% !important; 
+            left: 50% !important; 
+            right: auto !important;
+            transform: translate(-50%, -50%) !important; 
+            width: 85% !important; 
+            max-width: 300px !important;
+            z-index: 10000 !important;
+            box-shadow: 0 0 50px rgba(0,0,0,0.9) !important;
+          }
+          
+          .sync-row { grid-template-columns: 1fr; }
+          .btn-sync { width: 100%; justify-content: center; }
+        }
+
+        @media (max-width: 480px) {
+          .dashboard-container { padding: 1rem; }
+          .header-titles h1 { font-size: 1.75rem; }
+          .stat-card { padding: 1rem; }
+          .value { font-size: 1.5rem; }
+          .modal-footer { flex-direction: column; }
+          .modal-footer button { width: 100%; }
+        }
+
       `}</style>
     </div>
   );
