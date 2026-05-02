@@ -31,6 +31,7 @@ const NexoraDashboard = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [attendance, setAttendance] = useState({});
+  const [reportsSent, setReportsSent] = useState([]);
   const [recentSearches, setRecentSearches] = useState(() => {
     const saved = localStorage.getItem('nexora_recent_searches');
     return saved ? JSON.parse(saved) : [];
@@ -116,7 +117,7 @@ const NexoraDashboard = () => {
 
   const handlePrintAttendance = () => {
     const printWindow = window.open('', '_blank');
-    const presentTeams = mergedData.filter(team => (attendance[team.teamName] || []).length > 0);
+    const presentTeams = mergedData.filter(team => getValidAttendance(team.teamName, team.members).length > 0);
 
     const tableHtml = `
       <html>
@@ -205,9 +206,9 @@ const NexoraDashboard = () => {
             </thead>
             <tbody>
               ${presentTeams.map((team, teamIdx) => {
-                const members = team.detailedMembers || [{ name: team.teamName }];
-                const teamAttendance = attendance[team.teamName] || [];
-                return members.map((m, idx) => `
+      const members = team.detailedMembers || [{ name: team.teamName }];
+      const teamAttendance = getValidAttendance(team.teamName, team.members);
+      return members.map((m, idx) => `
                   <tr>
                     ${idx === 0 ? `
                       <td class="team-name-cell" rowspan="${members.length}" style="text-align: center;">${teamIdx + 1}</td>
@@ -219,7 +220,7 @@ const NexoraDashboard = () => {
                     </td>
                   </tr>
                 `).join('');
-              }).join('')}
+    }).join('')}
             </tbody>
           </table>
         </body>
@@ -232,7 +233,7 @@ const NexoraDashboard = () => {
 
   const handlePrintTeamReport = (team) => {
     const printWindow = window.open('', '_blank');
-    const teamAttendance = attendance[team.teamName] || [];
+    const teamAttendance = getValidAttendance(team.teamName, team.members);
     const members = team.detailedMembers || team.members.split(',').map(m => ({ name: m.trim() }));
 
     const tableHtml = `
@@ -336,8 +337,14 @@ const NexoraDashboard = () => {
           const data = await res.json();
           setAttendance(data);
         }
+
+        const repRes = await fetch(`${apiUrl}/api/reports`);
+        if (repRes.ok) {
+          const repData = await repRes.json();
+          setReportsSent(repData);
+        }
       } catch (e) {
-        console.error("Failed to fetch shared attendance", e);
+        console.error("Failed to fetch shared attendance or reports", e);
       }
     };
 
@@ -405,9 +412,9 @@ const NexoraDashboard = () => {
       let apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
       // Remove trailing slash if present
       if (apiUrl.endsWith('/')) apiUrl = apiUrl.slice(0, -1);
-      
+
       const response = await fetch(`${apiUrl}/api/sync-sheets?teamId=${sheetIdTeam}&paymentId=${sheetIdPayment}&masterId=${sheetIdMaster}`);
-      
+
       if (!response.ok) {
         const errData = await response.json();
         throw new Error(errData.error || "Failed to sync sheets through backend");
@@ -418,10 +425,10 @@ const NexoraDashboard = () => {
       setTeamData(tData);
       setPaymentData(pData);
       setMasterData(mData);
-      
+
       // Auto-trigger merge after fetch
       setTimeout(() => {
-         processAndMergeWithData(tData, pData, mData);
+        processAndMergeWithData(tData, pData, mData);
       }, 500);
 
     } catch (error) {
@@ -434,6 +441,47 @@ const NexoraDashboard = () => {
 
   const processAndMergeWithData = (tData, pData, mData = []) => {
     try {
+      // Heuristic: If master data seems to have no headers, re-map it using common Unstop indices
+      let normalizedMaster = mData;
+      if (mData && mData.length > 0) {
+        const firstRow = mData[0];
+        const keys = Object.keys(firstRow);
+
+        // Better heuristic: look for actual header column names
+        const hasHeaders = keys.some(k => {
+          const ck = String(k || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          return ck === 'email' || ck === 'candidatesemail' || ck === 'teamname' || ck.includes('organisation');
+        });
+
+        if (!hasHeaders && keys.length >= 10) {
+          console.log("Master sheet seems to be headerless. Applying Unstop index mapping.");
+          normalizedMaster = mData.map(row => {
+            return {
+              'Team ID': row[keys[3]] || '',
+              'Team Name': row[keys[1]] || '',
+              'Name': row[keys[4]] || '',
+              'Email': row[keys[5]] || '',
+              'Phone': row[keys[6]] || '',
+              'College': row[keys[14]] || row[keys[13]] || row[keys[15]] || '',
+              'Role': row[keys[9]] || '',
+              'City': row[keys[8]] || '',
+            };
+          });
+          // Also add the "header" row (which was data) back as data!
+          normalizedMaster.unshift({
+            'Team ID': keys[3],
+            'Team Name': keys[1],
+            'Name': keys[4],
+            'Email': keys[5],
+            'Phone': keys[6],
+            'College': keys[14] || keys[13] || keys[15],
+            'Role': keys[9],
+            'City': keys[8],
+          });
+        }
+      }
+      mData = normalizedMaster;
+
       const findVal = (obj, patterns) => {
         const keys = Object.keys(obj);
         const exactMatch = keys.find(k => {
@@ -449,7 +497,10 @@ const NexoraDashboard = () => {
       };
       const findAllVals = (obj, pattern) => {
         return Object.keys(obj)
-          .filter(k => k.toLowerCase().replace(/[^a-z0-9]/g, '').includes(pattern))
+          .filter(k => {
+            const cleanKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return cleanKey.includes(pattern) && !cleanKey.includes('number') && !cleanKey.includes('count') && !cleanKey.includes('total');
+          })
           .map(k => obj[k])
           .filter(v => v && String(v).trim().toLowerCase() !== 'n/a');
       };
@@ -463,7 +514,7 @@ const NexoraDashboard = () => {
           const targetKey = clean(teamIdKey);
           const targetEmail = String(findVal(team, ['email', 'mail']) || '').toLowerCase().trim();
           const targetPhone = cleanPhone(findVal(team, ['leaderphone', 'phone', 'contact', 'mobile', 'whatsapp']));
-          const targetLeader = clean(findVal(team, ['leader', 'captain', 'poc', 'representative']));
+          const targetLeader = clean(findVal(team, ['teamleader', 'leadername', 'leader', 'captain', 'poc', 'representative']));
 
           // Get basic member info from Team Sheet
           let membersList = findAllVals(team, 'participant');
@@ -472,8 +523,8 @@ const NexoraDashboard = () => {
           const memberString = Array.isArray(membersList) ? membersList.filter(m => m !== 'Not specified').join(', ') : String(membersList);
 
           let detailedMembers = [];
-          let college = 'N/A';
-          let city = 'N/A';
+          let college = String(findVal(team, ['college', 'university', 'institute', 'organization', 'organisation', 'institution']) || 'N/A');
+          let city = String(findVal(team, ['city', 'location', 'address', 'place']) || 'N/A');
           let masterPhone = null;
           let masterEmail = null;
 
@@ -503,11 +554,18 @@ const NexoraDashboard = () => {
               }
 
               detailedMembers = teamRows.map(r => {
-                const candidateName = String(
+                let candidateName = String(
                   findVal(r, ['candidatesname', 'participantname', 'membername', 'candidatename']) ||
                   findVal(r, ['name']) || ''
                 );
+
                 const userType = String(findVal(r, ['usertype', 'role', 'type']) || '').toLowerCase();
+                const isLeader = userType.includes('leader') || userType.includes('captain');
+
+                if (targetKey === 'champarancoder' && !isLeader && candidateName.toLowerCase().includes('priyanshu kumar')) {
+                  candidateName = 'Priyanshu K';
+                }
+
                 return {
                   name: candidateName,
                   email: String(findVal(r, ['candidatesemail', 'email', 'mail']) || '').toLowerCase().trim(),
@@ -518,6 +576,7 @@ const NexoraDashboard = () => {
                 };
               }).filter(m => m.name && clean(m.name) !== targetKey);
 
+              console.log('MAPPED TEAM:', targetKey, 'ROWS:', teamRows.length, 'COLLEGE:', detailedMembers[0]?.college);
               college = detailedMembers[0]?.college || 'N/A';
               city = detailedMembers[0]?.city || 'N/A';
             }
@@ -525,12 +584,30 @@ const NexoraDashboard = () => {
 
           // Fallback: if no master data, use Team Sheet member names
           if (detailedMembers.length === 0) {
-            detailedMembers = memberString.split(',').map(m => ({
-              name: m.trim(),
-              college: 'N/A',
-              city: 'N/A',
-              isLeader: false,
-            })).filter(m => m.name && m.name !== 'Not specified');
+            const rawLeader = String(findVal(team, ['teamleader', 'leadername', 'leader', 'captain', 'poc', 'representative']) || '').trim();
+            const fallbackMembers = [];
+
+            if (rawLeader && rawLeader.toLowerCase() !== 'n/a' && rawLeader.toLowerCase() !== 'not specified') {
+              fallbackMembers.push({
+                name: rawLeader,
+                college: college,
+                city: city,
+                isLeader: true,
+              });
+            }
+
+            memberString.split(',').forEach(m => {
+              const mName = m.trim();
+              if (mName && mName !== 'Not specified' && mName !== rawLeader) {
+                fallbackMembers.push({
+                  name: mName,
+                  college: college,
+                  city: city,
+                  isLeader: false,
+                });
+              }
+            });
+            detailedMembers = fallbackMembers;
           }
 
           // Find matching payment from Payment Sheet (now using master fallbacks if needed)
@@ -591,7 +668,7 @@ const NexoraDashboard = () => {
             teamName: String(teamIdKey),
             members: finalMembers || memberString || 'Not specified',
             detailedMembers: detailedMembers,
-            leader: leader.name || String(findVal(team, ['leader', 'captain', 'poc', 'representative']) || membersList[0] || 'N/A'),
+            leader: leader.name || String(findVal(team, ['teamleader', 'leadername', 'leader', 'captain', 'poc', 'representative']) || membersList[0] || 'N/A'),
             phone: targetPhone || masterPhone || String(findVal(team, ['leaderphone', 'phone', 'contact', 'mobile', 'whatsapp']) || 'N/A'),
             email: targetEmail || masterEmail || String(findVal(team, ['email', 'mail']) || 'N/A').toLowerCase(),
             project: findVal(team, ['project', 'title', 'idea', 'problem']) || 'N/A',
@@ -620,6 +697,26 @@ const NexoraDashboard = () => {
     }
   };
 
+  const toggleReportSent = async (teamName) => {
+    const isCurrentlySent = reportsSent.includes(teamName);
+    const newIsSent = !isCurrentlySent;
+
+    setReportsSent(prev => {
+      if (newIsSent) return [...prev, teamName];
+      return prev.filter(t => t !== teamName);
+    });
+
+    try {
+      await fetch(`${apiUrl}/api/reports`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teamName, isSent: newIsSent })
+      });
+    } catch (e) {
+      console.error("Sync reports failed", e);
+    }
+  };
+
   const toggleAttendance = async (teamName, memberName) => {
     const isCurrentlyPresent = attendance[teamName]?.includes(memberName);
     const newIsPresent = !isCurrentlyPresent;
@@ -643,9 +740,17 @@ const NexoraDashboard = () => {
     }
   };
 
+  function getValidAttendance(teamName, membersString) {
+    const presentList = attendance[teamName] || [];
+    if (!membersString) return presentList;
+    const expectedMembers = membersString.split(',').map(m => m.trim());
+    return presentList.filter(m => expectedMembers.includes(m));
+  };
+
   const toggleFullTeamAttendance = async (teamName, membersString) => {
     const members = membersString.split(',').map(m => m.trim());
-    const isAllPresent = attendance[teamName]?.length === members.length;
+    const validPresent = getValidAttendance(teamName, membersString);
+    const isAllPresent = validPresent.length === members.length;
     const newIsPresent = !isAllPresent;
 
     setAttendance(prev => ({
@@ -668,13 +773,13 @@ const NexoraDashboard = () => {
 
   const stats = useMemo(() => {
     if (mergedData.length === 0) return null;
-    
+
     let fullyPresent = 0;
     let partiallyPresent = 0;
     let absent = 0;
 
     mergedData.forEach(t => {
-      const presentMembers = (attendance[t.teamName] || []).length;
+      const presentMembers = getValidAttendance(t.teamName, t.members).length;
       const totalMembers = t.detailedMembers?.length || 1;
 
       if (presentMembers === 0) {
@@ -704,22 +809,23 @@ const NexoraDashboard = () => {
     });
 
     if (activeTab === 'paid') data = data.filter(t => String(t.paymentStatus || '').toLowerCase() === 'paid' || String(t.paymentStatus || '').toLowerCase() === 'success');
-    
+
     if (activeTab === 'partial') {
       data = data.filter(t => {
-        const count = (attendance[t.teamName] || []).length;
+        const count = getValidAttendance(t.teamName, t.members).length;
         return count > 0 && count < (t.detailedMembers?.length || 1);
       });
     }
-    
+
     if (activeTab === 'present') {
       data = data.filter(t => {
-        const count = (attendance[t.teamName] || []).length;
+        const count = getValidAttendance(t.teamName, t.members).length;
         return count >= (t.detailedMembers?.length || 1);
       });
     }
-    
-    if (activeTab === 'absent') data = data.filter(t => !attendance[t.teamName] || attendance[t.teamName].length === 0);
+
+    if (activeTab === 'absent') data = data.filter(t => getValidAttendance(t.teamName, t.members).length === 0);
+    if (activeTab === 'report_sent') data = data.filter(t => reportsSent.includes(t.teamName));
 
     // Filter by Domain
     if (domainFilter !== 'all') {
@@ -766,10 +872,10 @@ const NexoraDashboard = () => {
             animate={{ opacity: 1, y: 0 }}
             style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
           >
-            <img 
-              src="/nexora_brand_logo.png" 
-              alt="Nexora" 
-              style={{ height: '2.5em', width: 'auto', objectFit: 'contain' }} 
+            <img
+              src="/nexora_brand_logo.png"
+              alt="Nexora"
+              style={{ height: '2.5em', width: 'auto', objectFit: 'contain' }}
             />
             NEXORA DASHBOARD
           </motion.h1>
@@ -825,9 +931,9 @@ const NexoraDashboard = () => {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <button 
-                className="btn-primary" 
-                onClick={fetchFromSheets} 
+              <button
+                className="btn-primary"
+                onClick={fetchFromSheets}
                 disabled={isSyncing || isProcessing}
                 style={{ minWidth: '200px' }}
               >
@@ -902,7 +1008,7 @@ const NexoraDashboard = () => {
               </div>
               <div className="stat-trend"><TrendingUp size={12} /> Live</div>
             </div>
-            <div className="stat-card glass present" style={{position: 'relative'}}>
+            <div className="stat-card glass present" style={{ position: 'relative' }}>
               <div className="stat-info">
                 <CheckCircle className="stat-icon" />
                 <div>
@@ -948,7 +1054,7 @@ const NexoraDashboard = () => {
 
             <div className="filter-system">
               <div className="filter-popover-container" ref={filterMenuRef}>
-                <button 
+                <button
                   className={`btn-filter-icon glass ${showFilterMenu ? 'active' : ''}`}
                   onClick={toggleFilterMenu}
                 >
@@ -957,7 +1063,7 @@ const NexoraDashboard = () => {
 
                 <AnimatePresence>
                   {showFilterMenu && (
-                    <motion.div 
+                    <motion.div
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: 10 }}
@@ -970,8 +1076,8 @@ const NexoraDashboard = () => {
                         </button>
 
                         <div className="has-submenu" style={{ position: 'relative', width: '100%' }}>
-                          <button 
-                            className="submenu-trigger" 
+                          <button
+                            className="submenu-trigger"
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
@@ -1003,7 +1109,7 @@ const NexoraDashboard = () => {
                 {/* Domain submenu rendered OUTSIDE filter-menu as a separate card */}
                 <AnimatePresence>
                   {showFilterMenu && showDomainMenu && (
-                    <motion.div 
+                    <motion.div
                       initial={{ opacity: 0, x: 20 }}
                       animate={{ opacity: 1, x: 0 }}
                       exit={{ opacity: 0, x: 20 }}
@@ -1073,6 +1179,13 @@ const NexoraDashboard = () => {
                       <span className="domain-tag">{team.domain}</span>
                       <p className="project-name">{team.project}</p>
                     </div>
+                    {team.college && team.college !== 'N/A' && (
+                      <div className="college-preview" style={{ marginTop: '6px' }}>
+                        <span className="m-college" style={{ fontSize: '0.65rem' }}>
+                          <Database size={10} /> {team.college}
+                        </span>
+                      </div>
+                    )}
                     <div className="payment-preview">
                       <div className={`status-dot ${String(team.paymentStatus || 'pending').toLowerCase()}`}></div>
                       <span className="payment-label">{team.paymentStatus}</span>
@@ -1082,20 +1195,24 @@ const NexoraDashboard = () => {
                       {team.transactionId && team.transactionId !== 'N/A' && (
                         <span className="utr-tag">{team.transactionId}</span>
                       )}
-                      {attendance[team.teamName]?.length > 0 && (
-                        <span className={`attendance-badge ${attendance[team.teamName].length === (team.detailedMembers?.length || 1) ? 'all' : 'partial'}`}>
-                          {attendance[team.teamName].length}/{team.detailedMembers?.length || 1} Present
-                        </span>
-                      )}
+                      {(() => {
+                        const validPresent = getValidAttendance(team.teamName, team.members).length;
+                        const expectedTotal = team.members ? team.members.split(',').length : (team.detailedMembers?.length || 1);
+                        return validPresent > 0 ? (
+                          <span className={`attendance-badge ${validPresent === expectedTotal ? 'all' : 'partial'}`}>
+                            {validPresent}/{expectedTotal} Present
+                          </span>
+                        ) : null;
+                      })()}
                     </div>
                   </div>
                   <div className="card-footer">
                     <button
-                      className={`btn-attendance ${attendance[team.teamName]?.length === team.members.split(',').length ? 'all' : ''}`}
+                      className={`btn-attendance ${getValidAttendance(team.teamName, team.members).length === (team.members ? team.members.split(',').length : 1) ? 'all' : ''}`}
                       onClick={(e) => { e.stopPropagation(); toggleFullTeamAttendance(team.teamName, team.members); }}
                     >
-                      {attendance[team.teamName]?.length > 0 ? <CheckCircle size={14} /> : <Users size={14} />}
-                      {attendance[team.teamName]?.length === team.members.split(',').length ? 'All Present' : 'Mark Present'}
+                      {getValidAttendance(team.teamName, team.members).length > 0 ? <CheckCircle size={14} /> : <Users size={14} />}
+                      {getValidAttendance(team.teamName, team.members).length === (team.members ? team.members.split(',').length : 1) ? 'All Present' : 'Mark Present'}
                     </button>
                     <span className="view-details" onClick={() => openTeamModal(team)}>Insights <ArrowRight size={14} /></span>
                   </div>

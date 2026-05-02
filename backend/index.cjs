@@ -102,6 +102,11 @@ const initDb = async () => {
     `);
 
     await db.query(`
+      CREATE TABLE IF NOT EXISTS report_sent (
+        id ${isPostgres ? 'SERIAL' : 'INTEGER'} PRIMARY KEY ${isPostgres ? '' : 'AUTOINCREMENT'},
+        team_name TEXT UNIQUE
+      );
+
       CREATE TABLE IF NOT EXISTS attendance (
         id ${isPostgres ? 'SERIAL' : 'INTEGER'} PRIMARY KEY ${isPostgres ? '' : 'AUTOINCREMENT'},
         team_name TEXT,
@@ -131,6 +136,9 @@ initDb();
 const getGoogleAuth = () => {
   try {
     const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+    if (creds.private_key) {
+      creds.private_key = creds.private_key.replace(/\\n/g, '\n');
+    }
     return new google.auth.GoogleAuth({
       credentials: creds,
       scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
@@ -267,6 +275,38 @@ app.post('/api/register', async (req, res) => {
     res.json({ success: true, teamId });
   } catch (err) {
     res.status(400).json({ error: 'Team name already exists or database error.' });
+  }
+});
+
+// Get all report sent status
+app.get('/api/reports', async (req, res) => {
+  try {
+    const result = await db.query('SELECT team_name FROM report_sent');
+    const reports = result.rows.map(row => row.team_name);
+    res.json(reports);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Toggle report sent
+app.post('/api/reports', async (req, res) => {
+  const { teamName, isSent } = req.body;
+  try {
+    if (isSent) {
+      const query = process.env.RENDER === 'true'
+        ? 'INSERT INTO report_sent (team_name) VALUES ($1) ON CONFLICT DO NOTHING'
+        : 'INSERT OR IGNORE INTO report_sent (team_name) VALUES ($1)';
+      await db.query(query, [teamName]);
+    } else {
+      await db.query(
+        'DELETE FROM report_sent WHERE team_name = $1',
+        [teamName]
+      );
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
